@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, BigInteger, Text, Time, func
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, BigInteger, Numeric, Text, Time, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -149,6 +149,15 @@ class ServiceBay(Base):
     comment = Column(Text)
 
 
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+    __table_args__ = {"schema": "app"}
+    setting_key = Column(Text, primary_key=True)
+    setting_value = Column(Text, nullable=False)
+    description = Column(Text)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class ServiceVisit(Base):
     __tablename__ = "service_visits"
     __table_args__ = {"schema": "app"}
@@ -158,6 +167,7 @@ class ServiceVisit(Base):
     car_id = Column(BigInteger, ForeignKey("app.cars.car_id"), nullable=False)
     visit_source = Column(Text, nullable=False, default="request")
     visit_status = Column(Text, nullable=False, default="Создан")
+    work_type = Column(Text, nullable=False, default="Общее")
     problem_description = Column(Text, nullable=False)
     parts_mode = Column(Text)
     urgency = Column(Text)
@@ -165,6 +175,8 @@ class ServiceVisit(Base):
     preferred_contact_slot = Column(Text)
     client_comment = Column(Text)
     service_comment = Column(Text)
+    work_cost = Column(Numeric(12, 2))
+    master_profit = Column(Numeric(12, 2))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     planned_start_at = Column(DateTime(timezone=True))
     planned_end_at = Column(DateTime(timezone=True))

@@ -1,25 +1,24 @@
 {% extends 'base.html' %}
 {% block content %}
 <h1>Планер сервиса (день)</h1>
-<p>
-  <a class="btn" href="/planner?day={{ day }}">Сегодня</a>
-  <a class="btn" href="/planner?day={{ (day.__add__(cycler.__init__.__globals__.datetime.timedelta(days=-1))) if false else '' }}"></a>
-</p>
 <form method="get"><input type="date" name="day" value="{{ day }}"><button class="btn">Открыть дату</button></form>
 <table>
 <tr><th>Время</th>{% for b in bays %}<th>{{ b.bay_name }}</th>{% endfor %}</tr>
 {% for t in times %}
 <tr>
-  <td>{{ t }}-{{ '%02d:00'|format((t[:2]|int)+1) if t[:2]|int < 23 else '00:00' }}</td>
+  <td>{{ t }}</td>
   {% for b in bays %}
     {% set cell = grid[b.service_bay_id].get(t) %}
     <td>
-      {% if cell %}
+      {% if cell and cell.is_start %}
         <div class="slot booked">
-          {{ cell.client.full_name }}<br>{{ cell.car.brand }} {{ cell.car.model }}<br>{{ cell.car.plate_number }}<br>{{ cell.visit.problem_description }}<br>Статус: {{ cell.visit.visit_status }}
+          {{ cell.slot.start_time.strftime('%H:%M') }}–{{ cell.slot.end_time.strftime('%H:%M') }}<br>
+          {{ cell.client.full_name }}<br>{{ cell.car.brand }} {{ cell.car.model }}<br>{{ cell.car.plate_number }}<br>{{ cell.visit.work_type }}<br>{{ cell.visit.problem_description }}<br>Статус: {{ cell.visit.visit_status }}
         </div>
+      {% elif cell %}
+        <div class="slot continuation">занято</div>
       {% else %}
-        <div class="slot free">+ Записать</div>
+        <div class="slot free">+ Свободно</div>
       {% endif %}
     </td>
   {% endfor %}
@@ -33,11 +32,14 @@
   <input type="time" name="start_time" value="09:00" required>
   <input type="time" name="end_time" value="10:00" required>
   <select name="service_bay_id">{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select>
-  <select name="client_id" id="planner-client">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }} ({{ c.phone_raw }})</option>{% endfor %}</select>
-  <input type="number" name="car_id" placeholder="ID машины" required>
+  <select name="client_id">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }} ({{ c.phone_raw }})</option>{% endfor %}</select>
+  <select name="car_id" required>{% for car in cars %}<option value="{{ car.car_id }}">#{{ car.car_id }} {{ car.brand }} {{ car.model }} {{ car.plate_number }}</option>{% endfor %}</select>
   <input type="number" name="request_id" placeholder="ID заявки (необязательно)">
   <select name="employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select>
+  <input name="work_type" placeholder="Вид работы" required>
   <textarea name="problem_description" placeholder="Проблема" required></textarea>
+  <input type="number" step="0.01" min="0" name="work_cost" placeholder="Стоимость работ (₽)">
+  <input type="number" step="0.01" min="0" name="master_profit" placeholder="Прибыль мастера (₽)">
   <button class="btn">Записать</button>
 </form>
 {% endblock %}

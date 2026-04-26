@@ -134,6 +134,13 @@ CREATE TABLE IF NOT EXISTS app.service_bays (
     comment text NULL
 );
 
+CREATE TABLE IF NOT EXISTS app.app_settings (
+    setting_key text PRIMARY KEY,
+    setting_value text NOT NULL,
+    description text NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS app.service_visits (
     visit_id bigserial PRIMARY KEY,
     request_id bigint NULL REFERENCES app.service_requests(request_id),
@@ -142,6 +149,7 @@ CREATE TABLE IF NOT EXISTS app.service_visits (
 
     visit_source text NOT NULL DEFAULT 'request',
     visit_status text NOT NULL DEFAULT 'Создан',
+    work_type text NOT NULL DEFAULT 'Общее',
 
     problem_description text NOT NULL,
     parts_mode text NULL,
@@ -151,6 +159,8 @@ CREATE TABLE IF NOT EXISTS app.service_visits (
 
     client_comment text NULL,
     service_comment text NULL,
+    work_cost numeric(12,2) NULL,
+    master_profit numeric(12,2) NULL,
 
     created_at timestamptz NOT NULL DEFAULT now(),
     planned_start_at timestamptz NULL,

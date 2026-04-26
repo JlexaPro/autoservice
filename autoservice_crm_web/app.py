@@ -7,7 +7,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, cast, func, or_, select
 from sqlalchemy.orm import Session
-from sqlalchemy.types import Time
 
 from db import get_db
 from models import (
@@ -19,6 +18,7 @@ from models import (
     Followup,
     Promotion,
     RequestStatusHistory,
+    AppSetting,
     ServiceBay,
     ServiceRequest,
     ServiceSlot,
@@ -37,6 +37,32 @@ BASE_DIR = Path(__file__).parent
 app = FastAPI(title="Autoservice CRM")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+DEFAULT_WORK_START = "09:00"
+DEFAULT_WORK_END = "19:00"
+DEFAULT_SLOT_STEP_MIN = 30
+
+
+def get_setting(db: Session, key: str, default: str) -> str:
+    value = db.execute(select(AppSetting.setting_value).where(AppSetting.setting_key == key)).scalar_one_or_none()
+    return value or default
+
+
+def get_working_grid(db: Session):
+    start_s = get_setting(db, "workday_start", DEFAULT_WORK_START)
+    end_s = get_setting(db, "workday_end", DEFAULT_WORK_END)
+    step_s = get_setting(db, "slot_step_minutes", str(DEFAULT_SLOT_STEP_MIN))
+    step_min = max(15, int(step_s))
+    start_t = datetime.strptime(start_s, "%H:%M").time()
+    end_t = datetime.strptime(end_s, "%H:%M").time()
+    day_anchor = date.today()
+    cur = datetime.combine(day_anchor, start_t)
+    end_dt = datetime.combine(day_anchor, end_t)
+    points = []
+    while cur < end_dt:
+        points.append(cur.time())
+        cur += timedelta(minutes=step_min)
+    return start_t, end_t, step_min, points
 
 
 @app.get("/")
@@ -213,35 +239,56 @@ def car_detail(request: Request, car_id: int, db: Session = Depends(get_db)):
     works = db.execute(select(CarWorkHistory).where(CarWorkHistory.car_id == car_id).order_by(CarWorkHistory.work_date.desc())).scalars().all()
     visits = db.execute(select(ServiceVisit).where(ServiceVisit.car_id == car_id).order_by(ServiceVisit.created_at.desc())).scalars().all()
     reqs = db.execute(select(ServiceRequest).where(ServiceRequest.car_id == car_id).order_by(ServiceRequest.request_id.desc())).scalars().all()
-    return templates.TemplateResponse("car_detail.html", {"request": request, "car": car, "works": works, "visits": visits, "reqs": reqs})
+    employees = db.execute(select(Employee).where(Employee.is_active.is_(True)).order_by(Employee.full_name)).scalars().all()
+    return templates.TemplateResponse("car_detail.html", {"request": request, "car": car, "works": works, "visits": visits, "reqs": reqs, "employees": employees})
 
 
 @app.post("/cars/{car_id}/works")
-def add_car_work(car_id: int, work_date: date = Form(...), employee_number: str = Form(default=""), work_summary: str = Form(...), comment: str = Form(default=""), db: Session = Depends(get_db)):
+def add_car_work(car_id: int, work_date: date = Form(...), employee_id: int | None = Form(default=None), work_summary: str = Form(...), comment: str = Form(default=""), db: Session = Depends(get_db)):
     car = db.get(Car, car_id)
     if not car:
         raise HTTPException(404, "Авто не найдено")
     with db.begin():
-        db.add(CarWorkHistory(car_id=car_id, work_date=work_date, employee_number=employee_number or None, work_summary=work_summary, comment=comment or None, created_by="manager"))
+        employee = db.get(Employee, employee_id) if employee_id else None
+        db.add(CarWorkHistory(
+            car_id=car_id,
+            work_date=work_date,
+            employee_id=employee_id,
+            employee_number=employee.full_name if employee else None,
+            work_summary=work_summary,
+            comment=comment or None,
+            created_by="manager",
+        ))
     return RedirectResponse(f"/cars/{car_id}", status_code=303)
 
 
 @app.get("/planner")
 def planner(request: Request, day: date | None = None, db: Session = Depends(get_db)):
     d = day or date.today()
+    _, _, _, time_points = get_working_grid(db)
     bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True)).order_by(ServiceBay.bay_name)).scalars().all()
     if not bays:
         with db.begin():
             db.add_all([ServiceBay(bay_name="Пост 1"), ServiceBay(bay_name="Пост 2"), ServiceBay(bay_name="Диагностика")])
         bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True)).order_by(ServiceBay.bay_name)).scalars().all()
     slots = db.execute(select(ServiceSlot, ServiceVisit, Client, Car).join(ServiceVisit, ServiceVisit.visit_id == ServiceSlot.visit_id).join(Client, Client.client_id == ServiceVisit.client_id).join(Car, Car.car_id == ServiceVisit.car_id).where(ServiceSlot.slot_date == d)).all()
-    grid = {b.service_bay_id: {} for b in bays}
+    grid = {b.service_bay_id: {tp.strftime("%H:%M"): None for tp in time_points} for b in bays}
     for s, v, c, car in slots:
-        grid[s.service_bay_id][s.start_time.strftime("%H:%M")] = {"slot": s, "visit": v, "client": c, "car": car}
-    times = [time(h, 0).strftime("%H:%M") for h in range(9, 19)]
+        if s.service_bay_id not in grid:
+            continue
+        for tp in time_points:
+            if s.start_time <= tp < s.end_time:
+                grid[s.service_bay_id][tp.strftime("%H:%M")] = {
+                    "slot": s,
+                    "visit": v,
+                    "client": c,
+                    "car": car,
+                    "is_start": tp == s.start_time,
+                }
     employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
     clients = db.execute(select(Client).where(Client.is_active.is_(True)).limit(200)).scalars().all()
-    return templates.TemplateResponse("planner.html", {"request": request, "day": d, "bays": bays, "grid": grid, "times": times, "employees": employees, "clients": clients})
+    cars = db.execute(select(Car).where(Car.is_active.is_(True)).limit(500)).scalars().all()
+    return templates.TemplateResponse("planner.html", {"request": request, "day": d, "bays": bays, "grid": grid, "times": [tp.strftime("%H:%M") for tp in time_points], "employees": employees, "clients": clients, "cars": cars})
 
 
 @app.post("/planner/book")
@@ -253,8 +300,11 @@ def planner_book(
     client_id: int = Form(...),
     car_id: int = Form(...),
     problem_description: str = Form(...),
+    work_type: str = Form(...),
     employee_id: int | None = Form(default=None),
     request_id: int | None = Form(default=None),
+    work_cost: float | None = Form(default=None),
+    master_profit: float | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     st = datetime.strptime(start_time, "%H:%M").time()
@@ -291,12 +341,15 @@ def planner_book(
             car_id=car_id,
             visit_source="request" if request_id else "manual",
             visit_status="Записан",
+            work_type=work_type.strip(),
             problem_description=problem_description,
             planned_start_at=datetime.combine(day, st),
             planned_end_at=datetime.combine(day, et),
             assigned_employee_id=employee_id,
-            assigned_employee_number=employee.employee_number if employee else None,
+            assigned_employee_number=employee.full_name if employee else None,
             service_bay_id=service_bay_id,
+            work_cost=work_cost,
+            master_profit=master_profit,
         )
         db.add(visit)
         db.flush()
@@ -336,6 +389,29 @@ def employees_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("employees.html", {"request": request, "rows": rows})
 
 
+@app.post("/employees/new")
+def employees_new(
+    employee_number: str = Form(...),
+    full_name: str = Form(...),
+    role: str = Form(...),
+    phone: str = Form(default=""),
+    specialization: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    with db.begin():
+        exists = db.execute(select(Employee).where(Employee.employee_number == employee_number.strip())).scalar_one_or_none()
+        if exists:
+            raise HTTPException(400, "Сотрудник с таким табельным номером уже существует")
+        db.add(Employee(
+            employee_number=employee_number.strip(),
+            full_name=full_name.strip(),
+            role=role.strip(),
+            phone=phone.strip() or None,
+            specialization=specialization.strip() or None,
+        ))
+    return RedirectResponse("/employees", status_code=303)
+
+
 @app.get("/promotions")
 def promotions_page(request: Request, db: Session = Depends(get_db)):
     rows = db.execute(select(Promotion).order_by(Promotion.created_at.desc())).scalars().all()
@@ -343,8 +419,33 @@ def promotions_page(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/settings")
-def settings_page(request: Request):
-    return templates.TemplateResponse("settings.html", {"request": request})
+def settings_page(request: Request, db: Session = Depends(get_db)):
+    workday_start = get_setting(db, "workday_start", DEFAULT_WORK_START)
+    workday_end = get_setting(db, "workday_end", DEFAULT_WORK_END)
+    slot_step_minutes = get_setting(db, "slot_step_minutes", str(DEFAULT_SLOT_STEP_MIN))
+    return templates.TemplateResponse("settings.html", {"request": request, "workday_start": workday_start, "workday_end": workday_end, "slot_step_minutes": slot_step_minutes})
+
+
+@app.post("/settings/work-hours")
+def update_work_hours(
+    workday_start: str = Form(...),
+    workday_end: str = Form(...),
+    slot_step_minutes: int = Form(...),
+    db: Session = Depends(get_db),
+):
+    with db.begin():
+        for key, value, desc in [
+            ("workday_start", workday_start, "Начало рабочего дня"),
+            ("workday_end", workday_end, "Конец рабочего дня"),
+            ("slot_step_minutes", str(slot_step_minutes), "Шаг сетки планера в минутах"),
+        ]:
+            row = db.get(AppSetting, key)
+            if not row:
+                row = AppSetting(setting_key=key, setting_value=value, description=desc)
+                db.add(row)
+            else:
+                row.setting_value = value
+    return RedirectResponse("/settings", status_code=303)
 
 
 @app.post("/api/incoming-request")

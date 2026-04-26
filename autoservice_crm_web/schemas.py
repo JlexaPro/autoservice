@@ -1,8 +1,17 @@
 from datetime import date
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class IncomingRequestSchema(BaseModel):
+    @field_validator("car_year", "desired_visit_date", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
     external_request_id: str | None = None
     full_name: str
     phone: str

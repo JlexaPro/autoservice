@@ -34,8 +34,11 @@ python app.py
 - `/clients/{id}` — карточка клиента
 - `/cars/{id}` — карточка авто + работы
 - `/planner` — дневной планер
+- `/planner/book` — создание записи в слот (через форму на странице планера)
 - `/followups` — напоминания
 - `/employees` — сотрудники
+- `/employees/new` — добавление сотрудника
 - `/promotions` — акции (MVP)
 - `/settings` — настройки (MVP)
+- `/settings/work-hours` — настройка рабочего времени и шага сетки
 - `POST /api/incoming-request` — будущая интеграция онлайн-форм
