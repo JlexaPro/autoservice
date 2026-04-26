@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Финансы</h1>
+<form method="get" class="form-grid" style="max-width:340px">
+  <label>С <input type="date" name="start_date" value="{{ start_date }}"></label>
+  <label>По <input type="date" name="end_date" value="{{ end_date }}"></label>
+  <button class="btn">Применить</button>
+</form>
+<p><a class="btn" href="/finance/export.xlsx?start_date={{ start_date }}&end_date={{ end_date }}">Выгрузить в Excel</a></p>
+<div class="cards">
+  <div class="card">Выручка: <b>{{ '%.2f'|format(total_revenue) }} ₽</b></div>
+  <div class="card">Прибыль мастеров: <b>{{ '%.2f'|format(total_master_profit) }} ₽</b></div>
+  <div class="card">Прибыль сервиса: <b>{{ '%.2f'|format(service_profit) }} ₽</b></div>
+</div>
+<h3>По мастерам</h3>
+<table><tr><th>Мастер</th><th>Визитов</th><th>Выручка</th><th>Прибыль мастера</th></tr>
+{% for name, row in by_master %}<tr><td>{{ name }}</td><td>{{ row.count }}</td><td>{{ '%.2f'|format(row.revenue) }}</td><td>{{ '%.2f'|format(row.profit) }}</td></tr>{% endfor %}
+</table>
+<h3>Детализация визитов</h3>
+<table><tr><th>Дата</th><th>Клиент</th><th>Авто</th><th>Мастер</th><th>Вид работы</th><th>Стоимость</th><th>Прибыль мастера</th><th>Прибыль сервиса</th></tr>
+{% for v,e,c,car in visits %}<tr>
+  <td>{{ v.planned_start_at }}</td><td>{{ c.full_name }}</td><td>{{ car.brand }} {{ car.model }} {{ car.plate_number }}</td><td>{{ e.full_name if e else '' }}</td><td>{{ v.work_type }}</td><td>{{ v.work_cost or 0 }}</td><td>{{ v.master_profit or 0 }}</td><td>{{ (v.work_cost or 0) - (v.master_profit or 0) }}</td>
+</tr>{% endfor %}
+</table>
+{% endblock %}

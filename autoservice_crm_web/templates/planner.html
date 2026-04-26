@@ -1,45 +1,53 @@
 {% extends 'base.html' %}
 {% block content %}
-<h1>Планер сервиса (день)</h1>
-<form method="get"><input type="date" name="day" value="{{ day }}"><button class="btn">Открыть дату</button></form>
-<table>
-<tr><th>Время</th>{% for b in bays %}<th>{{ b.bay_name }}</th>{% endfor %}</tr>
-{% for t in times %}
-<tr>
-  <td>{{ t }}</td>
-  {% for b in bays %}
-    {% set cell = grid[b.service_bay_id].get(t) %}
-    <td>
-      {% if cell and cell.is_start %}
-        <div class="slot booked">
-          {{ cell.slot.start_time.strftime('%H:%M') }}–{{ cell.slot.end_time.strftime('%H:%M') }}<br>
-          {{ cell.client.full_name }}<br>{{ cell.car.brand }} {{ cell.car.model }}<br>{{ cell.car.plate_number }}<br>{{ cell.visit.work_type }}<br>{{ cell.visit.problem_description }}<br>Статус: {{ cell.visit.visit_status }}
-        </div>
-      {% elif cell %}
-        <div class="slot continuation">занято</div>
-      {% else %}
-        <div class="slot free">+ Свободно</div>
-      {% endif %}
-    </td>
-  {% endfor %}
-</tr>
-{% endfor %}
-</table>
+<h1>Планер сервиса (интерактивный)</h1>
+<form method="get" class="form-grid" style="max-width:260px">
+  <input type="date" name="day" value="{{ day }}">
+  <button class="btn">Открыть дату</button>
+</form>
 
-<h3>Добавить запись</h3>
-<form method="post" action="/planner/book" class="form-grid">
+<div id="planner-board" class="planner-board" data-day="{{ day }}" data-start-time="{{ start_time }}" data-step-min="{{ step_min }}" data-day-minutes="{{ day_minutes }}">
+  <div class="time-col">
+    {% for t in times %}<div class="time-mark" style="height: {{ step_min*2 }}px">{{ t }}</div>{% endfor %}
+  </div>
+  {% for b in bays %}
+  <div class="bay-col" data-bay-id="{{ b.service_bay_id }}">
+    <div class="bay-title">{{ b.bay_name }}</div>
+    <div class="bay-grid" style="height: {{ day_minutes*2 }}px">
+      {% for t in times %}<div class="grid-line" style="height: {{ step_min*2 }}px"></div>{% endfor %}
+      {% for v in visit_blocks if v.bay_id == b.service_bay_id %}
+      <div class="visit-block status-{{ v.status|lower|replace(' ','-') }}"
+           data-visit-id="{{ v.visit_id }}"
+           data-top="{{ v.top }}"
+           data-height="{{ v.height }}"
+           data-bay-id="{{ v.bay_id }}"
+           data-employee-id="{{ v.employee_id or '' }}"
+           style="top: {{ v.top*2 }}px; height: {{ v.height*2 }}px;">
+        <div class="visit-content">
+          <b>{{ v.start }}–{{ v.end }}</b><br>
+          {{ v.client }}<br>{{ v.car }} {{ v.plate }}<br>{{ v.work_type }}
+        </div>
+        <div class="resize-handle"></div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<h3>Создать визит</h3>
+<form method="post" action="/service_visits" class="form-grid">
   <input type="date" name="day" value="{{ day }}" required>
   <input type="time" name="start_time" value="09:00" required>
   <input type="time" name="end_time" value="10:00" required>
   <select name="service_bay_id">{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select>
-  <select name="client_id">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }} ({{ c.phone_raw }})</option>{% endfor %}</select>
-  <select name="car_id" required>{% for car in cars %}<option value="{{ car.car_id }}">#{{ car.car_id }} {{ car.brand }} {{ car.model }} {{ car.plate_number }}</option>{% endfor %}</select>
-  <input type="number" name="request_id" placeholder="ID заявки (необязательно)">
+  <select name="client_id">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }}</option>{% endfor %}</select>
+  <select name="car_id">{% for car in cars %}<option value="{{ car.car_id }}">#{{ car.car_id }} {{ car.brand }} {{ car.model }} {{ car.plate_number }}</option>{% endfor %}</select>
   <select name="employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select>
   <input name="work_type" placeholder="Вид работы" required>
-  <textarea name="problem_description" placeholder="Проблема" required></textarea>
+  <textarea name="problem_description" required placeholder="Проблема"></textarea>
   <input type="number" step="0.01" min="0" name="work_cost" placeholder="Стоимость работ (₽)">
   <input type="number" step="0.01" min="0" name="master_profit" placeholder="Прибыль мастера (₽)">
-  <button class="btn">Записать</button>
+  <button class="btn">Создать визит</button>
 </form>
 {% endblock %}

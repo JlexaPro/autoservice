@@ -1,12 +1,14 @@
 from datetime import date, datetime, time, timedelta
+from io import BytesIO
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import and_, cast, func, or_, select
+from sqlalchemy import Date, and_, cast, func, or_, select
 from sqlalchemy.orm import Session
+from openpyxl import Workbook
 
 from db import get_db
 from models import (
@@ -71,18 +73,18 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     tomorrow = today + timedelta(days=1)
     week_ago = today - timedelta(days=7)
 
-    new_today = db.scalar(select(func.count()).select_from(ServiceRequest).where(cast(ServiceRequest.source_created_at, date) == today))
+    new_today = db.scalar(select(func.count()).select_from(ServiceRequest).where(cast(ServiceRequest.source_created_at, Date) == today))
     overdue_followups = db.scalar(select(func.count()).select_from(Followup).where(Followup.task_status == "Открыто", Followup.due_date < today))
-    booked_today = db.scalar(select(func.count()).select_from(ServiceVisit).where(cast(ServiceVisit.planned_start_at, date) == today))
+    booked_today = db.scalar(select(func.count()).select_from(ServiceVisit).where(cast(ServiceVisit.planned_start_at, Date) == today))
     in_work_now = db.scalar(select(func.count()).select_from(ServiceVisit).where(ServiceVisit.visit_status == "В работе"))
-    done_today = db.scalar(select(func.count()).select_from(ServiceVisit).where(ServiceVisit.visit_status == "Завершён", cast(ServiceVisit.completed_at, date) == today))
-    refusals_7 = db.scalar(select(func.count()).select_from(ServiceRequest).where(ServiceRequest.request_status == "Отказ", cast(ServiceRequest.source_created_at, date) >= week_ago))
+    done_today = db.scalar(select(func.count()).select_from(ServiceVisit).where(ServiceVisit.visit_status == "Завершён", cast(ServiceVisit.completed_at, Date) == today))
+    refusals_7 = db.scalar(select(func.count()).select_from(ServiceRequest).where(ServiceRequest.request_status == "Отказ", cast(ServiceRequest.source_created_at, Date) >= week_ago))
 
     overdue_items = db.execute(
         select(Followup, Client).join(Client, Client.client_id == Followup.client_id).where(Followup.task_status == "Открыто", Followup.due_date < today).order_by(Followup.due_date.asc()).limit(10)
     ).all()
     visits_today = db.execute(
-        select(ServiceVisit, Client, Car).join(Client, Client.client_id == ServiceVisit.client_id).join(Car, Car.car_id == ServiceVisit.car_id).where(cast(ServiceVisit.planned_start_at, date) == today).order_by(ServiceVisit.planned_start_at.asc()).limit(20)
+        select(ServiceVisit, Client, Car).join(Client, Client.client_id == ServiceVisit.client_id).join(Car, Car.car_id == ServiceVisit.car_id).where(cast(ServiceVisit.planned_start_at, Date) == today).order_by(ServiceVisit.planned_start_at.asc()).limit(20)
     ).all()
 
     return templates.TemplateResponse("dashboard.html", {"request": request, "cards": {
@@ -104,7 +106,7 @@ def requests_page(request: Request, q: str = "", status: str = "", only_today: b
     if status:
         query = query.where(ServiceRequest.request_status == status)
     if only_today:
-        query = query.where(cast(ServiceRequest.source_created_at, date) == date.today())
+        query = query.where(cast(ServiceRequest.source_created_at, Date) == date.today())
     if only_new:
         query = query.where(ServiceRequest.request_status == "Новая")
     rows = db.execute(query.limit(200)).scalars().all()
@@ -262,37 +264,88 @@ def add_car_work(car_id: int, work_date: date = Form(...), employee_id: int | No
     return RedirectResponse(f"/cars/{car_id}", status_code=303)
 
 
+def _check_visit_overlap(db: Session, start_dt: datetime, end_dt: datetime, service_bay_id: int, employee_id: int | None, exclude_visit_id: int | None = None):
+    base = select(ServiceVisit).where(
+        ServiceVisit.service_bay_id == service_bay_id,
+        ServiceVisit.planned_start_at < end_dt,
+        ServiceVisit.planned_end_at > start_dt,
+        ServiceVisit.visit_status != "Отменён",
+    )
+    if exclude_visit_id:
+        base = base.where(ServiceVisit.visit_id != exclude_visit_id)
+    if db.execute(base).scalar_one_or_none():
+        raise HTTPException(400, "Этот пост уже занят в выбранное время")
+    if employee_id:
+        emp_q = select(ServiceVisit).where(
+            ServiceVisit.assigned_employee_id == employee_id,
+            ServiceVisit.planned_start_at < end_dt,
+            ServiceVisit.planned_end_at > start_dt,
+            ServiceVisit.visit_status != "Отменён",
+        )
+        if exclude_visit_id:
+            emp_q = emp_q.where(ServiceVisit.visit_id != exclude_visit_id)
+        if db.execute(emp_q).scalar_one_or_none():
+            raise HTTPException(400, "Этот мастер уже занят в выбранное время")
+
+
+def _sync_service_slot(db: Session, visit: ServiceVisit):
+    slot = db.execute(select(ServiceSlot).where(ServiceSlot.visit_id == visit.visit_id)).scalar_one_or_none()
+    if not slot:
+        slot = ServiceSlot(visit_id=visit.visit_id, slot_status="Забронирован")
+        db.add(slot)
+    slot.slot_date = visit.planned_start_at.date()
+    slot.start_time = visit.planned_start_at.time()
+    slot.end_time = visit.planned_end_at.time()
+    slot.service_bay_id = visit.service_bay_id
+    slot.employee_id = visit.assigned_employee_id
+
+
 @app.get("/planner")
 def planner(request: Request, day: date | None = None, db: Session = Depends(get_db)):
     d = day or date.today()
-    _, _, _, time_points = get_working_grid(db)
+    start_t, end_t, step_min, time_points = get_working_grid(db)
     bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True)).order_by(ServiceBay.bay_name)).scalars().all()
     if not bays:
         with db.begin():
             db.add_all([ServiceBay(bay_name="Пост 1"), ServiceBay(bay_name="Пост 2"), ServiceBay(bay_name="Диагностика")])
         bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True)).order_by(ServiceBay.bay_name)).scalars().all()
-    slots = db.execute(select(ServiceSlot, ServiceVisit, Client, Car).join(ServiceVisit, ServiceVisit.visit_id == ServiceSlot.visit_id).join(Client, Client.client_id == ServiceVisit.client_id).join(Car, Car.car_id == ServiceVisit.car_id).where(ServiceSlot.slot_date == d)).all()
-    grid = {b.service_bay_id: {tp.strftime("%H:%M"): None for tp in time_points} for b in bays}
-    for s, v, c, car in slots:
-        if s.service_bay_id not in grid:
-            continue
-        for tp in time_points:
-            if s.start_time <= tp < s.end_time:
-                grid[s.service_bay_id][tp.strftime("%H:%M")] = {
-                    "slot": s,
-                    "visit": v,
-                    "client": c,
-                    "car": car,
-                    "is_start": tp == s.start_time,
-                }
+    day_start = datetime.combine(d, start_t)
+    day_end = datetime.combine(d, end_t)
+    visits = db.execute(
+        select(ServiceVisit, Client, Car, Employee)
+        .join(Client, Client.client_id == ServiceVisit.client_id)
+        .join(Car, Car.car_id == ServiceVisit.car_id)
+        .join(Employee, Employee.employee_id == ServiceVisit.assigned_employee_id, isouter=True)
+        .where(ServiceVisit.planned_start_at < day_end, ServiceVisit.planned_end_at > day_start, ServiceVisit.service_bay_id.is_not(None))
+    ).all()
+    visit_blocks = []
+    for visit, client, car, employee in visits:
+        top = int((visit.planned_start_at - day_start).total_seconds() // 60)
+        height = max(step_min, int((visit.planned_end_at - visit.planned_start_at).total_seconds() // 60))
+        visit_blocks.append({
+            "visit_id": visit.visit_id,
+            "bay_id": visit.service_bay_id,
+            "top": top,
+            "height": height,
+            "status": visit.visit_status,
+            "start": visit.planned_start_at.strftime("%H:%M"),
+            "end": visit.planned_end_at.strftime("%H:%M"),
+            "client": client.full_name,
+            "car": f"{car.brand} {car.model}",
+            "plate": car.plate_number,
+            "problem": visit.problem_description,
+            "work_type": visit.work_type,
+            "employee": employee.full_name if employee else "",
+            "employee_id": visit.assigned_employee_id,
+        })
     employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
     clients = db.execute(select(Client).where(Client.is_active.is_(True)).limit(200)).scalars().all()
     cars = db.execute(select(Car).where(Car.is_active.is_(True)).limit(500)).scalars().all()
-    return templates.TemplateResponse("planner.html", {"request": request, "day": d, "bays": bays, "grid": grid, "times": [tp.strftime("%H:%M") for tp in time_points], "employees": employees, "clients": clients, "cars": cars})
+    return templates.TemplateResponse("planner.html", {"request": request, "day": d, "bays": bays, "times": [tp.strftime("%H:%M") for tp in time_points], "step_min": step_min, "visit_blocks": visit_blocks, "employees": employees, "clients": clients, "cars": cars, "start_time": start_t.strftime("%H:%M"), "day_minutes": int((day_end - day_start).total_seconds() // 60)})
 
 
-@app.post("/planner/book")
-def planner_book(
+@app.post("/service_visits")
+def create_service_visit(
     day: date = Form(...),
     start_time: str = Form(...),
     end_time: str = Form(...),
@@ -311,28 +364,9 @@ def planner_book(
     et = datetime.strptime(end_time, "%H:%M").time()
     if et <= st:
         raise HTTPException(400, "Время окончания должно быть позже начала")
-
-    overlap_bay = db.execute(select(ServiceSlot).where(
-        ServiceSlot.slot_date == day,
-        ServiceSlot.service_bay_id == service_bay_id,
-        ServiceSlot.start_time < et,
-        ServiceSlot.end_time > st,
-        ServiceSlot.slot_status.in_(["Забронирован", "Занят"])
-    )).scalars().first()
-    if overlap_bay:
-        raise HTTPException(400, "Этот пост уже занят в выбранное время")
-
-    if employee_id:
-        overlap_emp = db.execute(select(ServiceSlot).where(
-            ServiceSlot.slot_date == day,
-            ServiceSlot.employee_id == employee_id,
-            ServiceSlot.start_time < et,
-            ServiceSlot.end_time > st,
-            ServiceSlot.slot_status.in_(["Забронирован", "Занят"])
-        )).scalars().first()
-        if overlap_emp:
-            raise HTTPException(400, "Этот мастер уже занят в выбранное время")
-
+    start_dt = datetime.combine(day, st)
+    end_dt = datetime.combine(day, et)
+    _check_visit_overlap(db, start_dt, end_dt, service_bay_id, employee_id)
     with db.begin():
         employee = db.get(Employee, employee_id) if employee_id else None
         visit = ServiceVisit(
@@ -343,8 +377,8 @@ def planner_book(
             visit_status="Записан",
             work_type=work_type.strip(),
             problem_description=problem_description,
-            planned_start_at=datetime.combine(day, st),
-            planned_end_at=datetime.combine(day, et),
+            planned_start_at=start_dt,
+            planned_end_at=end_dt,
             assigned_employee_id=employee_id,
             assigned_employee_number=employee.full_name if employee else None,
             service_bay_id=service_bay_id,
@@ -353,12 +387,68 @@ def planner_book(
         )
         db.add(visit)
         db.flush()
-        db.add(ServiceSlot(slot_date=day, start_time=st, end_time=et, service_bay_id=service_bay_id, employee_id=employee_id, slot_status="Забронирован", visit_id=visit.visit_id))
+        _sync_service_slot(db, visit)
         if request_id:
             req = db.get(ServiceRequest, request_id)
             if req:
                 change_request_status(db, req, "Записан", comment="Запись через планер")
     return RedirectResponse(f"/planner?day={day.isoformat()}", status_code=303)
+
+
+@app.put("/service_visits/{visit_id}")
+def update_service_visit_api(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+    visit = db.get(ServiceVisit, visit_id)
+    if not visit:
+        raise HTTPException(404, "Визит не найден")
+    try:
+        day = datetime.strptime(payload["day"], "%Y-%m-%d").date()
+        st = datetime.strptime(payload["start_time"], "%H:%M").time()
+        et = datetime.strptime(payload["end_time"], "%H:%M").time()
+    except Exception:
+        raise HTTPException(400, "Неверный формат даты/времени")
+    start_dt = datetime.combine(day, st)
+    end_dt = datetime.combine(day, et)
+    if end_dt <= start_dt:
+        raise HTTPException(400, "Время окончания должно быть позже начала")
+    service_bay_id = int(payload["service_bay_id"])
+    employee_id = int(payload["employee_id"]) if payload.get("employee_id") else None
+    _check_visit_overlap(db, start_dt, end_dt, service_bay_id, employee_id, exclude_visit_id=visit_id)
+    with db.begin():
+        visit.planned_start_at = start_dt
+        visit.planned_end_at = end_dt
+        visit.service_bay_id = service_bay_id
+        visit.assigned_employee_id = employee_id
+        _sync_service_slot(db, visit)
+    return {"ok": True}
+
+
+@app.delete("/service_visits/{visit_id}")
+def delete_service_visit_api(visit_id: int, db: Session = Depends(get_db)):
+    visit = db.get(ServiceVisit, visit_id)
+    if not visit:
+        raise HTTPException(404, "Визит не найден")
+    with db.begin():
+        slot = db.execute(select(ServiceSlot).where(ServiceSlot.visit_id == visit_id)).scalar_one_or_none()
+        if slot:
+            db.delete(slot)
+        db.delete(visit)
+    return {"ok": True}
+
+
+@app.get("/service_visits/{visit_id}")
+def service_visit_detail(request: Request, visit_id: int, db: Session = Depends(get_db)):
+    row = db.execute(
+        select(ServiceVisit, Client, Car, Employee, ServiceBay)
+        .join(Client, Client.client_id == ServiceVisit.client_id)
+        .join(Car, Car.car_id == ServiceVisit.car_id)
+        .join(Employee, Employee.employee_id == ServiceVisit.assigned_employee_id, isouter=True)
+        .join(ServiceBay, ServiceBay.service_bay_id == ServiceVisit.service_bay_id, isouter=True)
+        .where(ServiceVisit.visit_id == visit_id)
+    ).first()
+    if not row:
+        raise HTTPException(404, "Визит не найден")
+    visit, client, car, employee, bay = row
+    return templates.TemplateResponse("visit_detail.html", {"request": request, "visit": visit, "client": client, "car": car, "employee": employee, "bay": bay})
 
 
 @app.get("/followups")
@@ -416,6 +506,81 @@ def employees_new(
 def promotions_page(request: Request, db: Session = Depends(get_db)):
     rows = db.execute(select(Promotion).order_by(Promotion.created_at.desc())).scalars().all()
     return templates.TemplateResponse("promotions.html", {"request": request, "rows": rows})
+
+
+@app.get("/finance")
+def finance_page(request: Request, start_date: date | None = None, end_date: date | None = None, db: Session = Depends(get_db)):
+    today = date.today()
+    start_date = start_date or today.replace(day=1)
+    end_date = end_date or today
+    visits = db.execute(
+        select(ServiceVisit, Employee, Client, Car)
+        .join(Employee, Employee.employee_id == ServiceVisit.assigned_employee_id, isouter=True)
+        .join(Client, Client.client_id == ServiceVisit.client_id)
+        .join(Car, Car.car_id == ServiceVisit.car_id)
+        .where(cast(ServiceVisit.planned_start_at, Date) >= start_date, cast(ServiceVisit.planned_start_at, Date) <= end_date)
+        .order_by(ServiceVisit.planned_start_at.asc())
+    ).all()
+    total_revenue = sum(float(v.work_cost or 0) for v, _, _, _ in visits)
+    total_master_profit = sum(float(v.master_profit or 0) for v, _, _, _ in visits)
+    service_profit = total_revenue - total_master_profit
+    by_master: dict[str, dict] = {}
+    for visit, employee, _, _ in visits:
+        name = employee.full_name if employee else "Без мастера"
+        by_master.setdefault(name, {"revenue": 0.0, "profit": 0.0, "count": 0})
+        by_master[name]["revenue"] += float(visit.work_cost or 0)
+        by_master[name]["profit"] += float(visit.master_profit or 0)
+        by_master[name]["count"] += 1
+    return templates.TemplateResponse("finance.html", {
+        "request": request,
+        "start_date": start_date,
+        "end_date": end_date,
+        "visits": visits,
+        "total_revenue": total_revenue,
+        "total_master_profit": total_master_profit,
+        "service_profit": service_profit,
+        "by_master": sorted(by_master.items(), key=lambda x: x[0]),
+    })
+
+
+@app.get("/finance/export.xlsx")
+def finance_export(start_date: date | None = None, end_date: date | None = None, db: Session = Depends(get_db)):
+    today = date.today()
+    start_date = start_date or today.replace(day=1)
+    end_date = end_date or today
+    visits = db.execute(
+        select(ServiceVisit, Employee, Client, Car, ServiceBay)
+        .join(Employee, Employee.employee_id == ServiceVisit.assigned_employee_id, isouter=True)
+        .join(Client, Client.client_id == ServiceVisit.client_id)
+        .join(Car, Car.car_id == ServiceVisit.car_id)
+        .join(ServiceBay, ServiceBay.service_bay_id == ServiceVisit.service_bay_id, isouter=True)
+        .where(cast(ServiceVisit.planned_start_at, Date) >= start_date, cast(ServiceVisit.planned_start_at, Date) <= end_date)
+        .order_by(ServiceVisit.planned_start_at.asc())
+    ).all()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Финансы"
+    ws.append(["Дата", "Клиент", "Авто", "Пост", "Мастер", "Вид работы", "Проблема", "Стоимость", "Прибыль мастера", "Прибыль сервиса"])
+    for visit, employee, client, car, bay in visits:
+        cost = float(visit.work_cost or 0)
+        mp = float(visit.master_profit or 0)
+        ws.append([
+            visit.planned_start_at.strftime("%Y-%m-%d %H:%M") if visit.planned_start_at else "",
+            client.full_name,
+            f"{car.brand} {car.model} {car.plate_number}",
+            bay.bay_name if bay else "",
+            employee.full_name if employee else "",
+            visit.work_type,
+            visit.problem_description,
+            cost,
+            mp,
+            cost - mp,
+        ])
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    filename = f"finance_{start_date}_{end_date}.xlsx"
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename=\"{filename}\"'})
 
 
 @app.get("/settings")

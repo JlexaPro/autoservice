@@ -34,8 +34,13 @@ python app.py
 - `/clients/{id}` — карточка клиента
 - `/cars/{id}` — карточка авто + работы
 - `/planner` — дневной планер
-- `/planner/book` — создание записи в слот (через форму на странице планера)
+- `POST /service_visits` — создание визита из планера
+- `PUT /service_visits/{id}` — drag&drop / resize обновление визита
+- `DELETE /service_visits/{id}` — удаление визита
+- `/service_visits/{id}` — карточка визита
 - `/followups` — напоминания
+- `/finance` — финансы и прибыль
+- `/finance/export.xlsx` — выгрузка в Excel
 - `/employees` — сотрудники
 - `/employees/new` — добавление сотрудника
 - `/promotions` — акции (MVP)
