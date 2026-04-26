@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Планер сервиса (день)</h1>
+<p>
+  <a class="btn" href="/planner?day={{ day }}">Сегодня</a>
+  <a class="btn" href="/planner?day={{ (day.__add__(cycler.__init__.__globals__.datetime.timedelta(days=-1))) if false else '' }}"></a>
+</p>
+<form method="get"><input type="date" name="day" value="{{ day }}"><button class="btn">Открыть дату</button></form>
+<table>
+<tr><th>Время</th>{% for b in bays %}<th>{{ b.bay_name }}</th>{% endfor %}</tr>
+{% for t in times %}
+<tr>
+  <td>{{ t }}-{{ '%02d:00'|format((t[:2]|int)+1) if t[:2]|int < 23 else '00:00' }}</td>
+  {% for b in bays %}
+    {% set cell = grid[b.service_bay_id].get(t) %}
+    <td>
+      {% if cell %}
+        <div class="slot booked">
+          {{ cell.client.full_name }}<br>{{ cell.car.brand }} {{ cell.car.model }}<br>{{ cell.car.plate_number }}<br>{{ cell.visit.problem_description }}<br>Статус: {{ cell.visit.visit_status }}
+        </div>
+      {% else %}
+        <div class="slot free">+ Записать</div>
+      {% endif %}
+    </td>
+  {% endfor %}
+</tr>
+{% endfor %}
+</table>
+
+<h3>Добавить запись</h3>
+<form method="post" action="/planner/book" class="form-grid">
+  <input type="date" name="day" value="{{ day }}" required>
+  <input type="time" name="start_time" value="09:00" required>
+  <input type="time" name="end_time" value="10:00" required>
+  <select name="service_bay_id">{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select>
+  <select name="client_id" id="planner-client">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }} ({{ c.phone_raw }})</option>{% endfor %}</select>
+  <input type="number" name="car_id" placeholder="ID машины" required>
+  <input type="number" name="request_id" placeholder="ID заявки (необязательно)">
+  <select name="employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select>
+  <textarea name="problem_description" placeholder="Проблема" required></textarea>
+  <button class="btn">Записать</button>
+</form>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Напоминания</h1>
+<table>
+<tr><th>Дата</th><th>Статус</th><th>Клиент</th><th>Телефон</th><th>Авто</th><th>Задача</th><th>Действия</th></tr>
+{% for f,c,car in rows %}
+<tr {% if f.task_status=='Открыто' and f.due_date < today %}class="overdue"{% endif %}>
+  <td>{{ f.due_date }}</td><td>{{ f.task_status }}</td><td><a href="/clients/{{ c.client_id }}">{{ c.full_name }}</a></td><td>{{ c.phone_raw }}</td><td>{% if car %}{{ car.brand }} {{ car.model }}{% endif %}</td><td>{{ f.title }}</td>
+  <td>{% if f.task_status == 'Открыто' %}<form method="post" action="/followups/{{ f.followup_id }}/done"><button class="btn">Выполнить</button></form>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+{% endblock %}

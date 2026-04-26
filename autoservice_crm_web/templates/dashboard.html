@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Главная</h1>
+<div class="cards">
+  <div class="card">Новых заявок сегодня<br><b>{{ cards.new_today }}</b></div>
+  <div class="card">Просроченных напоминаний<br><b>{{ cards.overdue_followups }}</b></div>
+  <div class="card">Записано на сегодня<br><b>{{ cards.booked_today }}</b></div>
+  <div class="card">В работе сейчас<br><b>{{ cards.in_work_now }}</b></div>
+  <div class="card">Завершено сегодня<br><b>{{ cards.done_today }}</b></div>
+  <div class="card">Отказов за 7 дней<br><b>{{ cards.refusals_7 }}</b></div>
+</div>
+<p><a class="btn" href="/requests/new">Добавить заявку</a> <a class="btn" href="/planner">Открыть планер</a> <a class="btn" href="/clients">Добавить клиента</a> <a class="btn" href="/followups">Создать напоминание</a></p>
+<h2>Просроченные напоминания</h2>
+<table><tr><th>Дата</th><th>Клиент</th><th>Задача</th></tr>{% for f,c in overdue_items %}<tr><td>{{ f.due_date }}</td><td><a href="/clients/{{ c.client_id }}">{{ c.full_name }}</a></td><td>{{ f.title }}</td></tr>{% endfor %}</table>
+<h2>Записи на сегодня</h2>
+<table><tr><th>Время</th><th>Клиент</th><th>Авто</th><th>Статус</th></tr>{% for v,c,car in visits_today %}<tr><td>{{ v.planned_start_at }}</td><td>{{ c.full_name }}</td><td>{{ car.brand }} {{ car.model }} {{ car.plate_number }}</td><td>{{ v.visit_status }}</td></tr>{% endfor %}</table>
+{% endblock %}

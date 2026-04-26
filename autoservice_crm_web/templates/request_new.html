@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Новая заявка</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" class="form-grid">
+  <label>ФИО* <input name="full_name" required></label>
+  <label>Телефон* <input name="phone_raw" required></label>
+  <label>Марка* <input name="car_brand" required></label>
+  <label>Модель* <input name="car_model" required></label>
+  <label>Госномер* <input name="car_plate" required></label>
+  <label>Проблема* <textarea name="problem_description" required></textarea></label>
+  <label>Email <input name="email"></label>
+  <label>Год авто <input type="number" name="car_year"></label>
+  <label>Срочность <input name="urgency"></label>
+  <label>Желаемая дата <input type="date" name="desired_visit_date"></label>
+  <label>Удобное время связи <input name="preferred_contact_slot"></label>
+  <label>Комментарий <textarea name="client_comment"></textarea></label>
+  <label>Запчасти <input name="parts_mode"></label>
+  <button class="btn">Сохранить</button>
+</form>
+{% endblock %}

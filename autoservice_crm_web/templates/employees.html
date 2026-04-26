@@ -1,0 +1,7 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Сотрудники</h1>
+<table><tr><th>Табельный номер</th><th>ФИО</th><th>Роль</th><th>Специализация</th><th>Активность</th></tr>
+{% for e in rows %}<tr><td>{{ e.employee_number }}</td><td>{{ e.full_name }}</td><td>{{ e.role }}</td><td>{{ e.specialization or '' }}</td><td>{{ 'Да' if e.is_active else 'Нет' }}</td></tr>{% endfor %}
+</table>
+{% endblock %}
