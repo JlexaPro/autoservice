@@ -67,6 +67,22 @@ def get_working_grid(db: Session):
     return start_t, end_t, step_min, points
 
 
+def none_if_empty(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
+def normalize_dt_for_planner(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     today = date.today()
@@ -301,7 +317,7 @@ def _sync_service_slot(db: Session, visit: ServiceVisit):
 
 
 @app.get("/planner")
-def planner(request: Request, day: date | None = None, db: Session = Depends(get_db)):
+def planner(request: Request, day: date | None = None, error: str = "", db: Session = Depends(get_db)):
     d = day or date.today()
     start_t, end_t, step_min, time_points = get_working_grid(db)
     bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True)).order_by(ServiceBay.bay_name)).scalars().all()
@@ -320,16 +336,20 @@ def planner(request: Request, day: date | None = None, db: Session = Depends(get
     ).all()
     visit_blocks = []
     for visit, client, car, employee in visits:
-        top = int((visit.planned_start_at - day_start).total_seconds() // 60)
-        height = max(step_min, int((visit.planned_end_at - visit.planned_start_at).total_seconds() // 60))
+        planned_start = normalize_dt_for_planner(visit.planned_start_at)
+        planned_end = normalize_dt_for_planner(visit.planned_end_at)
+        if not planned_start or not planned_end:
+            continue
+        top = int((planned_start - day_start).total_seconds() // 60)
+        height = max(step_min, int((planned_end - planned_start).total_seconds() // 60))
         visit_blocks.append({
             "visit_id": visit.visit_id,
             "bay_id": visit.service_bay_id,
             "top": top,
             "height": height,
             "status": visit.visit_status,
-            "start": visit.planned_start_at.strftime("%H:%M"),
-            "end": visit.planned_end_at.strftime("%H:%M"),
+            "start": planned_start.strftime("%H:%M"),
+            "end": planned_end.strftime("%H:%M"),
             "client": client.full_name,
             "car": f"{car.brand} {car.model}",
             "plate": car.plate_number,
@@ -337,11 +357,46 @@ def planner(request: Request, day: date | None = None, db: Session = Depends(get
             "work_type": visit.work_type,
             "employee": employee.full_name if employee else "",
             "employee_id": visit.assigned_employee_id,
+            "has_conflict": False,
         })
+    by_bay = {}
+    for v in visit_blocks:
+        by_bay.setdefault(v["bay_id"], []).append(v)
+    for _, bay_visits in by_bay.items():
+        bay_visits.sort(key=lambda x: x["top"])
+        for i, cur in enumerate(bay_visits):
+            cur_start, cur_end = cur["top"], cur["top"] + cur["height"]
+            for j, other in enumerate(bay_visits):
+                if i == j:
+                    continue
+                o_start, o_end = other["top"], other["top"] + other["height"]
+                if cur_start < o_end and cur_end > o_start:
+                    cur["has_conflict"] = True
+                    break
     employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
     clients = db.execute(select(Client).where(Client.is_active.is_(True)).limit(200)).scalars().all()
     cars = db.execute(select(Car).where(Car.is_active.is_(True)).limit(500)).scalars().all()
-    return templates.TemplateResponse("planner.html", {"request": request, "day": d, "bays": bays, "times": [tp.strftime("%H:%M") for tp in time_points], "step_min": step_min, "visit_blocks": visit_blocks, "employees": employees, "clients": clients, "cars": cars, "start_time": start_t.strftime("%H:%M"), "day_minutes": int((day_end - day_start).total_seconds() // 60)})
+    return templates.TemplateResponse("planner.html", {"request": request, "day": d, "bays": bays, "times": [tp.strftime("%H:%M") for tp in time_points], "step_min": step_min, "visit_blocks": visit_blocks, "employees": employees, "clients": clients, "cars": cars, "start_time": start_t.strftime("%H:%M"), "day_minutes": int((day_end - day_start).total_seconds() // 60), "error": error})
+
+
+@app.get("/planner/conflicts")
+def planner_conflicts(day: date | None = None, db: Session = Depends(get_db)):
+    d = day or date.today()
+    rows = db.execute(
+        select(ServiceVisit)
+        .where(cast(ServiceVisit.planned_start_at, Date) == d)
+        .order_by(ServiceVisit.service_bay_id, ServiceVisit.planned_start_at)
+    ).scalars().all()
+    conflicts = []
+    for i, a in enumerate(rows):
+        for j, b in enumerate(rows):
+            if i >= j or a.visit_id == b.visit_id:
+                continue
+            if a.service_bay_id != b.service_bay_id:
+                continue
+            if a.planned_start_at < b.planned_end_at and a.planned_end_at > b.planned_start_at:
+                conflicts.append({"visit_a": a.visit_id, "visit_b": b.visit_id, "bay_id": a.service_bay_id})
+    return {"ok": True, "day": d.isoformat(), "conflicts": conflicts}
 
 
 @app.post("/service_visits")
@@ -360,66 +415,101 @@ def create_service_visit(
     master_profit: float | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    employee_id = none_if_empty(employee_id)
+    request_id = none_if_empty(request_id)
+    work_cost = none_if_empty(work_cost)
+    master_profit = none_if_empty(master_profit)
+    problem_description = none_if_empty(problem_description)
+    work_type = none_if_empty(work_type)
     st = datetime.strptime(start_time, "%H:%M").time()
     et = datetime.strptime(end_time, "%H:%M").time()
     if et <= st:
         raise HTTPException(400, "Время окончания должно быть позже начала")
     start_dt = datetime.combine(day, st)
     end_dt = datetime.combine(day, et)
-    _check_visit_overlap(db, start_dt, end_dt, service_bay_id, employee_id)
-    with db.begin():
-        employee = db.get(Employee, employee_id) if employee_id else None
-        visit = ServiceVisit(
-            request_id=request_id,
-            client_id=client_id,
-            car_id=car_id,
-            visit_source="request" if request_id else "manual",
-            visit_status="Записан",
-            work_type=work_type.strip(),
-            problem_description=problem_description,
-            planned_start_at=start_dt,
-            planned_end_at=end_dt,
-            assigned_employee_id=employee_id,
-            assigned_employee_number=employee.full_name if employee else None,
-            service_bay_id=service_bay_id,
-            work_cost=work_cost,
-            master_profit=master_profit,
-        )
-        db.add(visit)
-        db.flush()
-        _sync_service_slot(db, visit)
-        if request_id:
-            req = db.get(ServiceRequest, request_id)
-            if req:
-                change_request_status(db, req, "Записан", comment="Запись через планер")
+    try:
+        _check_visit_overlap(db, start_dt, end_dt, service_bay_id, employee_id)
+        with db.begin():
+            employee = db.get(Employee, employee_id) if employee_id else None
+            visit = ServiceVisit(
+                request_id=request_id,
+                client_id=client_id,
+                car_id=car_id,
+                visit_source="request" if request_id else "manual",
+                visit_status="Записан",
+                work_type=work_type.strip(),
+                problem_description=problem_description,
+                planned_start_at=start_dt,
+                planned_end_at=end_dt,
+                assigned_employee_id=employee_id,
+                assigned_employee_number=employee.full_name if employee else None,
+                service_bay_id=service_bay_id,
+                work_cost=work_cost,
+                master_profit=master_profit,
+            )
+            db.add(visit)
+            db.flush()
+            _sync_service_slot(db, visit)
+            if request_id:
+                req = db.get(ServiceRequest, request_id)
+                if req:
+                    change_request_status(db, req, "Записан", comment="Запись через планер")
+    except HTTPException as e:
+        return RedirectResponse(f"/planner?day={day.isoformat()}&error={e.detail}", status_code=303)
     return RedirectResponse(f"/planner?day={day.isoformat()}", status_code=303)
 
 
 @app.put("/service_visits/{visit_id}")
 def update_service_visit_api(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+    return update_visit_common(visit_id, payload, db)
+
+
+def update_visit_common(visit_id: int, payload: dict, db: Session):
     visit = db.get(ServiceVisit, visit_id)
     if not visit:
-        raise HTTPException(404, "Визит не найден")
+        return {"ok": False, "error": "Визит не найден"}
     try:
         day = datetime.strptime(payload["day"], "%Y-%m-%d").date()
         st = datetime.strptime(payload["start_time"], "%H:%M").time()
         et = datetime.strptime(payload["end_time"], "%H:%M").time()
     except Exception:
-        raise HTTPException(400, "Неверный формат даты/времени")
+        return {"ok": False, "error": "Неверный формат даты/времени"}
     start_dt = datetime.combine(day, st)
     end_dt = datetime.combine(day, et)
     if end_dt <= start_dt:
-        raise HTTPException(400, "Время окончания должно быть позже начала")
+        return {"ok": False, "error": "Время окончания должно быть позже начала"}
     service_bay_id = int(payload["service_bay_id"])
     employee_id = int(payload["employee_id"]) if payload.get("employee_id") else None
-    _check_visit_overlap(db, start_dt, end_dt, service_bay_id, employee_id, exclude_visit_id=visit_id)
-    with db.begin():
-        visit.planned_start_at = start_dt
-        visit.planned_end_at = end_dt
-        visit.service_bay_id = service_bay_id
-        visit.assigned_employee_id = employee_id
-        _sync_service_slot(db, visit)
-    return {"ok": True}
+    try:
+        _check_visit_overlap(db, start_dt, end_dt, service_bay_id, employee_id, exclude_visit_id=visit_id)
+        with db.begin():
+            visit.planned_start_at = start_dt
+            visit.planned_end_at = end_dt
+            visit.service_bay_id = service_bay_id
+            visit.assigned_employee_id = employee_id
+            visit.client_id = int(payload["client_id"]) if payload.get("client_id") else visit.client_id
+            visit.car_id = int(payload["car_id"]) if payload.get("car_id") else visit.car_id
+            visit.problem_description = none_if_empty(payload.get("problem_description")) or visit.problem_description
+            visit.work_type = none_if_empty(payload.get("work_type")) or visit.work_type
+            visit.service_comment = none_if_empty(payload.get("service_comment"))
+            visit.visit_status = none_if_empty(payload.get("visit_status")) or visit.visit_status
+            _sync_service_slot(db, visit)
+        return {"ok": True, "visit": {"visit_id": visit.visit_id, "service_bay_id": visit.service_bay_id, "start_time": st.strftime("%H:%M"), "end_time": et.strftime("%H:%M")}}
+    except HTTPException as e:
+        return {"ok": False, "error": e.detail}
+    except Exception:
+        db.rollback()
+        return {"ok": False, "error": "Не удалось сохранить запись"}
+
+
+@app.put("/api/visits/{visit_id}/move")
+def api_move_visit(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+    return update_visit_common(visit_id, payload, db)
+
+
+@app.put("/api/visits/{visit_id}")
+def api_update_visit(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+    return update_visit_common(visit_id, payload, db)
 
 
 @app.delete("/service_visits/{visit_id}")

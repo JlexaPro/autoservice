@@ -38,6 +38,9 @@ python app.py
 - `PUT /service_visits/{id}` — drag&drop / resize обновление визита
 - `DELETE /service_visits/{id}` — удаление визита
 - `/service_visits/{id}` — карточка визита
+- `PUT /api/visits/{id}/move` — перенос/resize визита с JSON-ответом
+- `PUT /api/visits/{id}` — редактирование визита из модалки
+- `/planner/conflicts` — диагностика конфликтов в планере
 - `/followups` — напоминания
 - `/finance` — финансы и прибыль
 - `/finance/export.xlsx` — выгрузка в Excel

@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 <h1>Планер сервиса (интерактивный)</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
 <form method="get" class="form-grid" style="max-width:260px">
   <input type="date" name="day" value="{{ day }}">
   <button class="btn">Открыть дату</button>
@@ -16,12 +17,17 @@
     <div class="bay-grid" style="height: {{ day_minutes*2 }}px">
       {% for t in times %}<div class="grid-line" style="height: {{ step_min*2 }}px"></div>{% endfor %}
       {% for v in visit_blocks if v.bay_id == b.service_bay_id %}
-      <div class="visit-block status-{{ v.status|lower|replace(' ','-') }}"
+      <div class="visit-card {% if v.has_conflict %}conflict{% endif %} status-{{ v.status|lower|replace(' ','-') }}"
            data-visit-id="{{ v.visit_id }}"
            data-top="{{ v.top }}"
            data-height="{{ v.height }}"
            data-bay-id="{{ v.bay_id }}"
            data-employee-id="{{ v.employee_id or '' }}"
+           data-client="{{ v.client }}"
+           data-car="{{ v.car }} {{ v.plate }}"
+           data-problem="{{ v.problem }}"
+           data-status="{{ v.status }}"
+           data-work-type="{{ v.work_type }}"
            style="top: {{ v.top*2 }}px; height: {{ v.height*2 }}px;">
         <div class="visit-content">
           <b>{{ v.start }}–{{ v.end }}</b><br>
@@ -33,6 +39,38 @@
     </div>
   </div>
   {% endfor %}
+</div>
+
+<div id="visit-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Редактировать визит</h3>
+    <form id="visit-edit-form" class="form-grid">
+      <input type="hidden" name="visit_id">
+      <label>Клиент <input name="client" disabled></label>
+      <label>Авто <input name="car" disabled></label>
+      <label>Проблема <textarea name="problem_description"></textarea></label>
+      <label>Статус
+        <select name="visit_status">
+          <option>Создан</option><option>Связались</option><option>Записан</option><option>В работе</option><option>Завершён</option><option>Отменён</option>
+        </select>
+      </label>
+      <label>Дата <input type="date" name="day" value="{{ day }}"></label>
+      <label>Начало <input type="time" name="start_time"></label>
+      <label>Окончание <input type="time" name="end_time"></label>
+      <label>Вид работы <input name="work_type"></label>
+      <label>Комментарий <textarea name="service_comment"></textarea></label>
+      <label>Пост
+        <select name="service_bay_id">{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select>
+      </label>
+      <label>Мастер
+        <select name="employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select>
+      </label>
+      <div>
+        <button class="btn" type="submit">Сохранить</button>
+        <button class="btn" type="button" id="modal-close">Закрыть</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <h3>Создать визит</h3>
