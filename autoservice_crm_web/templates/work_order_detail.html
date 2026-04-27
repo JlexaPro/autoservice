@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 <h1>Заказ-наряд {{ wo.order_number }}</h1>
+<p><a class="btn" href="/work-orders/{{ wo.work_order_id }}/export.pdf">Скачать PDF</a></p>
 <p>Статус: <b>{{ wo.status }}</b> | Сумма: <b>{{ wo.total_amount }}</b> | Себестоимость: <b>{{ wo.total_cost }}</b> | Прибыль: <b>{{ wo.total_profit }}</b></p>
 <p>Клиент: {{ client.full_name }} | Авто: {{ car.brand }} {{ car.model }} {{ car.plate_number }}</p>
 <form method="post" action="/work-orders/{{ wo.work_order_id }}/status" class="form-grid" style="max-width:260px">

@@ -41,6 +41,14 @@
     card.dataset.bayId = state.bayId;
   }
 
+  function refreshCardTime(card){
+    const start = minToTime(roundToStep(parseInt(card.style.top,10)/2));
+    const end = minToTime(roundToStep((parseInt(card.style.top,10)+parseInt(card.style.height,10))/2));
+    card.querySelector('.visit-content b').textContent = `${start}–${end}`;
+    card.dataset.start = start;
+    card.dataset.end = end;
+  }
+
   async function apiUpdate(card){
     const topPx = parseInt(card.style.top,10);
     const hPx = parseInt(card.style.height,10);
@@ -88,6 +96,8 @@
           if(!data.ok){
             alert(data.error || 'Не удалось сохранить запись');
             restoreState(card, state);
+          } else {
+            refreshCardTime(card);
           }
         } catch(err){
           alert('Не удалось сохранить запись');
@@ -120,6 +130,7 @@
         try {
           const data = await apiUpdate(card);
           if(!data.ok){ alert(data.error || 'Не удалось сохранить запись'); restoreState(card, state); }
+          else { refreshCardTime(card); }
         } catch(err){ alert('Не удалось сохранить запись'); restoreState(card, state); }
       };
     });
@@ -176,10 +187,17 @@
       const start = minToTime(min);
       const end = minToTime(min+stepMin);
       const bay = grid.closest('.bay-col').dataset.bayId;
-      const createForm = document.querySelector('form[action="/service_visits"]');
-      if(createForm){ createForm.querySelector('[name="start_time"]').value=start; createForm.querySelector('[name="end_time"]').value=end; createForm.querySelector('[name="service_bay_id"]').value=bay; window.scrollTo({top:createForm.offsetTop-20, behavior:'smooth'}); }
+      const createModal = document.getElementById('create-slot-modal');
+      const createForm = document.getElementById('create-slot-form');
+      if(createModal && createForm){
+        createModal.classList.remove('hidden');
+        createForm.querySelector('[name="start_time"]').value=start;
+        createForm.querySelector('[name="end_time"]').value=end;
+        createForm.querySelector('[name="service_bay_id"]').value=bay;
+      }
     });
   });
+  document.getElementById('create-modal-close')?.addEventListener('click', ()=> document.getElementById('create-slot-modal')?.classList.add('hidden'));
 
   document.querySelectorAll('.quick-work').forEach(btn=>{
     btn.addEventListener('click', ()=>{

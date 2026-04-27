@@ -37,6 +37,7 @@ python app.py
 - `/work-orders` — заказ-наряды
 - `/work-orders/new` — создание заказ-наряда
 - `/work-orders/{id}` — карточка заказ-наряда (работы, запчасти, прибыль)
+- `/work-orders/{id}/export.pdf` — печатный PDF заказ-наряда
 - `POST /service_visits` — создание визита из планера
 - `PUT /service_visits/{id}` — drag&drop / resize обновление визита
 - `DELETE /service_visits/{id}` — удаление визита
@@ -50,6 +51,7 @@ python app.py
 - `/finance/export.xlsx` — выгрузка в Excel
 - `/employees` — сотрудники
 - `/employees/new` — добавление сотрудника
+- `/employees/{id}` — карточка сотрудника (ФИО, ДР, ставка, комментарии)
 - `/promotions` — акции (MVP)
 - `/settings` — настройки (MVP)
 - `/settings/work-hours` — настройка рабочего времени и шага сетки

@@ -10,7 +10,7 @@
   {% for b in bays %}<div class="card">{{ b.bay_name }}: загрузка <b>{{ bay_load[b.service_bay_id] }}%</b></div>{% endfor %}
 </div>
 
-<div id="planner-board" class="planner-board" data-day="{{ day }}" data-start-time="{{ start_time }}" data-step-min="{{ step_min }}" data-day-minutes="{{ day_minutes }}">
+<div id="planner-board" class="planner-board" style="--bay-count: {{ bays|length }};" data-day="{{ day }}" data-start-time="{{ start_time }}" data-step-min="{{ step_min }}" data-day-minutes="{{ day_minutes }}">
   <div class="time-col">
     {% for t in times %}<div class="time-mark" style="height: {{ step_min*2 }}px">{{ t }}</div>{% endfor %}
   </div>
@@ -90,7 +90,8 @@
   <input type="time" name="end_time" value="10:00" required>
   <select name="service_bay_id">{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select>
   <select name="client_id">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }}</option>{% endfor %}</select>
-  <select name="car_id">{% for car in cars %}<option value="{{ car.car_id }}">#{{ car.car_id }} {{ car.brand }} {{ car.model }} {{ car.plate_number }}</option>{% endfor %}</select>
+  <input name="car_id" list="cars-list" placeholder="ID|Марка Модель Госномер" required>
+  <datalist id="cars-list">{% for car in cars %}<option value="{{ car.car_id }}|{{ car.brand }} {{ car.model }} {{ car.plate_number }}"></option>{% endfor %}</datalist>
   <select name="employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select>
   <input name="work_type" placeholder="Вид работы" required>
   <textarea name="problem_description" required placeholder="Проблема"></textarea>
@@ -98,4 +99,23 @@
   <input type="number" step="0.01" min="0" name="master_profit" placeholder="Прибыль мастера (₽)">
   <button class="btn">Создать визит</button>
 </form>
+
+<div id="create-slot-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Создать запись в слоте</h3>
+    <form id="create-slot-form" method="post" action="/service_visits" class="form-grid">
+      <label>Дата <input type="date" name="day" value="{{ day }}"></label>
+      <label>Начало <input type="time" name="start_time"></label>
+      <label>Окончание <input type="time" name="end_time"></label>
+      <label>Пост <select name="service_bay_id">{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select></label>
+      <label>Клиент <select name="client_id">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }}</option>{% endfor %}</select></label>
+      <label>Авто <input name="car_id" list="cars-list" required></label>
+      <label>Мастер <select name="employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select></label>
+      <label>Вид работы <input name="work_type" required></label>
+      <label>Проблема <textarea name="problem_description" required></textarea></label>
+      <button class="btn" type="submit">Создать</button>
+      <button class="btn" type="button" id="create-modal-close">Закрыть</button>
+    </form>
+  </div>
+</div>
 {% endblock %}

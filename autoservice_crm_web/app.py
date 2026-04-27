@@ -9,6 +9,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import Date, and_, cast, func, or_, select
 from sqlalchemy.orm import Session
 from openpyxl import Workbook
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
 
 from db import get_db
 from models import (
@@ -453,19 +455,21 @@ def create_service_visit(
     end_time: str = Form(...),
     service_bay_id: int = Form(...),
     client_id: int = Form(...),
-    car_id: int = Form(...),
+    car_id: str = Form(...),
     problem_description: str = Form(...),
     work_type: str = Form(...),
-    employee_id: int | None = Form(default=None),
-    request_id: int | None = Form(default=None),
-    work_cost: float | None = Form(default=None),
-    master_profit: float | None = Form(default=None),
+    employee_id: str = Form(default=""),
+    request_id: str = Form(default=""),
+    work_cost: str = Form(default=""),
+    master_profit: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
-    employee_id = none_if_empty(employee_id)
-    request_id = none_if_empty(request_id)
-    work_cost = none_if_empty(work_cost)
-    master_profit = none_if_empty(master_profit)
+    car_id = str(car_id).split("|")[0].strip()
+    employee_id = int(employee_id) if none_if_empty(employee_id) else None
+    request_id = int(request_id) if none_if_empty(request_id) else None
+    work_cost = float(work_cost) if none_if_empty(work_cost) else None
+    master_profit = float(master_profit) if none_if_empty(master_profit) else None
+    car_id_int = int(car_id)
     problem_description = none_if_empty(problem_description)
     work_type = none_if_empty(work_type)
     st = datetime.strptime(start_time, "%H:%M").time()
@@ -481,7 +485,7 @@ def create_service_visit(
             visit = ServiceVisit(
                 request_id=request_id,
                 client_id=client_id,
-                car_id=car_id,
+                    car_id=car_id_int,
                 visit_source="request" if request_id else "manual",
                 visit_status="Записан",
                 work_type=work_type.strip(),
@@ -616,13 +620,50 @@ def employees_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("employees.html", {"request": request, "rows": rows})
 
 
+@app.get("/employees/{employee_id}")
+def employee_detail(request: Request, employee_id: int, db: Session = Depends(get_db)):
+    employee = db.get(Employee, employee_id)
+    if not employee:
+        raise HTTPException(404, "Сотрудник не найден")
+    return templates.TemplateResponse("employee_detail.html", {"request": request, "employee": employee})
+
+
+@app.post("/employees/{employee_id}")
+def employee_update(
+    employee_id: int,
+    full_name: str = Form(...),
+    role: str = Form(...),
+    phone: str = Form(default=""),
+    birth_date: date | None = Form(default=None),
+    hourly_rate: str = Form(default=""),
+    specialization: str = Form(default=""),
+    comments: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    employee = db.get(Employee, employee_id)
+    if not employee:
+        raise HTTPException(404, "Сотрудник не найден")
+    with db.begin():
+        employee.full_name = full_name.strip()
+        employee.role = role.strip()
+        employee.phone = none_if_empty(phone.strip())
+        employee.birth_date = birth_date
+        employee.hourly_rate = float(hourly_rate) if none_if_empty(hourly_rate) else None
+        employee.specialization = none_if_empty(specialization.strip())
+        employee.comments = none_if_empty(comments.strip())
+    return RedirectResponse(f"/employees/{employee_id}", status_code=303)
+
+
 @app.post("/employees/new")
 def employees_new(
     employee_number: str = Form(...),
     full_name: str = Form(...),
     role: str = Form(...),
     phone: str = Form(default=""),
+    birth_date: date | None = Form(default=None),
+    hourly_rate: str = Form(default=""),
     specialization: str = Form(default=""),
+    comments: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
     with db.begin():
@@ -634,7 +675,10 @@ def employees_new(
             full_name=full_name.strip(),
             role=role.strip(),
             phone=phone.strip() or None,
+            birth_date=birth_date,
+            hourly_rate=float(hourly_rate) if none_if_empty(hourly_rate) else None,
             specialization=specialization.strip() or None,
+            comments=comments.strip() or None,
         ))
     return RedirectResponse("/employees", status_code=303)
 
@@ -762,6 +806,52 @@ def work_order_detail(request: Request, work_order_id: int, db: Session = Depend
     history = db.execute(select(WorkOrderStatusHistory).where(WorkOrderStatusHistory.work_order_id == work_order_id).order_by(WorkOrderStatusHistory.changed_at.desc())).scalars().all()
     employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
     return templates.TemplateResponse("work_order_detail.html", {"request": request, "wo": wo, "client": client, "car": car, "items": items, "parts": parts, "history": history, "employees": employees})
+
+
+@app.get("/work-orders/{work_order_id}/export.pdf")
+def work_order_pdf(work_order_id: int, db: Session = Depends(get_db)):
+    wo = db.get(WorkOrder, work_order_id)
+    if not wo:
+        raise HTTPException(404, "Заказ-наряд не найден")
+    client = db.get(Client, wo.client_id)
+    car = db.get(Car, wo.car_id)
+    items = db.execute(select(WorkOrderItem).where(WorkOrderItem.work_order_id == work_order_id)).scalars().all()
+    parts = db.execute(select(WorkOrderPart).where(WorkOrderPart.work_order_id == work_order_id)).scalars().all()
+    buff = BytesIO()
+    pdf = canvas.Canvas(buff, pagesize=A4)
+    y = 800
+    pdf.setFont("Helvetica-Bold", 13)
+    pdf.drawString(40, y, f"Заказ-наряд № {wo.order_number}")
+    y -= 20
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(40, y, f"Дата: {wo.opened_at}")
+    y -= 15
+    pdf.drawString(40, y, f"Клиент: {client.full_name if client else ''}")
+    y -= 15
+    pdf.drawString(40, y, f"Авто: {car.brand if car else ''} {car.model if car else ''} {car.plate_number if car else ''}")
+    y -= 20
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(40, y, "Работы")
+    y -= 15
+    pdf.setFont("Helvetica", 10)
+    for i in items:
+        pdf.drawString(45, y, f"{i.work_type} | {i.qty} x {i.unit_price} = {i.line_total}")
+        y -= 13
+    y -= 8
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(40, y, "Запчасти")
+    y -= 15
+    pdf.setFont("Helvetica", 10)
+    for p in parts:
+        pdf.drawString(45, y, f"{p.part_name} | {p.qty} x {p.sale_price} = {p.line_total}")
+        y -= 13
+    y -= 15
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(40, y, f"Итого: {wo.total_amount} | Себестоимость: {wo.total_cost} | Прибыль: {wo.total_profit}")
+    pdf.showPage()
+    pdf.save()
+    buff.seek(0)
+    return StreamingResponse(buff, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename=\"work_order_{wo.order_number}.pdf\"'})
 
 
 @app.post("/work-orders/{work_order_id}/items")
