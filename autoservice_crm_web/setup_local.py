@@ -12,10 +12,16 @@ from logging_setup import setup_logging
 
 def apply_sql_file(engine, file_path: Path) -> None:
     sql_text = file_path.read_text(encoding="utf-8")
-    with engine.raw_connection() as raw_conn:
-        with raw_conn.cursor() as cursor:
-            cursor.execute(sql_text)
+    raw_conn = engine.raw_connection()
+    cursor = None
+    try:
+        cursor = raw_conn.cursor()
+        cursor.execute(sql_text)
         raw_conn.commit()
+    finally:
+        if cursor is not None:
+            cursor.close()
+        raw_conn.close()
 
 
 def main() -> int:

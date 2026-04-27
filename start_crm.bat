@@ -1,96 +1,103 @@
 @echo off
-chcp 65001 >nul
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal EnableExtensions
 
-echo ===============================================
-echo Автонастройка и запуск Autoservice CRM
-echo ===============================================
+echo ================================================
+echo Autoservice CRM - безопасный запуск
+echo ================================================
 
 set "ROOT_DIR=%~dp0"
 set "APP_DIR=%ROOT_DIR%autoservice_crm_web"
 
-if not exist "%APP_DIR%\app.py" (
-  echo [ERROR] Не найдена папка приложения: %APP_DIR%
-  pause
-  exit /b 1
-)
+echo Root: %ROOT_DIR%
+echo App : %APP_DIR%
+echo.
+
+if not exist "%APP_DIR%\app.py" goto :err_no_app
 
 cd /d "%APP_DIR%"
+if errorlevel 1 goto :err_cd
 
 if not exist ".env" (
   if exist ".env.example" (
     copy /Y ".env.example" ".env" >nul
-    echo [INFO] Создан .env из .env.example
+    echo [1/6] Создан .env из .env.example
   ) else (
-    echo [ERROR] Не найден .env.example
-    goto :fail
+    goto :err_no_env_example
   )
+) else (
+  echo [1/6] .env уже существует
 )
 
 if not exist ".venv\Scripts\python.exe" (
-  echo [1/8] Создание виртуального окружения...
+  echo [2/6] Создание виртуального окружения...
   python -m venv .venv
-  if errorlevel 1 (
-    echo [ERROR] Не удалось создать .venv. Проверьте установку Python.
-    goto :fail
-  )
+  if errorlevel 1 goto :err_venv
+) else (
+  echo [2/6] Активация виртуального окружения...
 )
 
 call ".venv\Scripts\activate.bat"
-if errorlevel 1 (
-  echo [ERROR] Не удалось активировать .venv
-  goto :fail
-)
+if errorlevel 1 goto :err_activate
 
-echo [2/8] Установка зависимостей...
+echo [3/6] Установка зависимостей...
 python -m pip install --disable-pip-version-check -r requirements.txt
-if errorlevel 1 (
-  echo [ERROR] Не удалось установить зависимости.
-  goto :fail
-)
+if errorlevel 1 goto :err_requirements
 
-echo [3/8] Проверка библиотек...
-python -c "import fastapi,uvicorn,sqlalchemy,psycopg2,openpyxl,reportlab,jinja2" 1>nul 2>nul
-if errorlevel 1 (
-  echo [ERROR] После установки зависимостей не удалось импортировать библиотеки.
-  goto :fail
-)
-
-echo [4/8] Автоподготовка БД (DDL + patch + проверка)...
+echo [4/6] Проверка и автоподготовка БД...
 python setup_local.py
-if errorlevel 1 (
-  echo [ERROR] Автоподготовка БД не пройдена.
-  goto :fail
-)
+if errorlevel 1 goto :err_setup
 
-echo [5/8] Проверка свободного порта 8000...
-set "PIDS="
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":8000 .*LISTENING"') do (
-  set "PIDS=!PIDS! %%P"
-)
+echo [5/6] Освобождение порта 8000 (если занят)...
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":8000 .*LISTENING"') do taskkill /PID %%P /F >nul 2>&1
 
-if defined PIDS (
-  echo [INFO] Найдены процессы на порту 8000: !PIDS!
-  for %%P in (!PIDS!) do (
-    taskkill /PID %%P /F >nul 2>&1
-  )
-  timeout /t 1 >nul
-)
-
-echo [6/8] Запуск Uvicorn...
-echo [7/8] Приложение доступно по адресу:
-echo      http://127.0.0.1:8000
-echo [8/8] Для остановки нажмите Ctrl+C
-
+echo [6/6] Запуск сервера...
+echo Откройте в браузере: http://127.0.0.1:8000
+echo Для остановки нажмите Ctrl+C
 python -m uvicorn app:app --host 127.0.0.1 --port 8000
-set "EXIT_CODE=%ERRORLEVEL%"
+if errorlevel 1 goto :err_uvicorn
 
-echo Uvicorn завершил работу с кодом %EXIT_CODE%
-pause
-exit /b %EXIT_CODE%
+goto :ok
 
-:fail
+:err_no_app
+echo [ERROR] Не найдена папка приложения: %APP_DIR%
+goto :pause
+
+:err_cd
+echo [ERROR] Не удалось перейти в папку приложения.
+goto :pause
+
+:err_no_env_example
+echo [ERROR] Не найден файл .env.example
+goto :pause
+
+:err_venv
+echo [ERROR] Не удалось создать .venv. Проверьте Python в PATH.
+goto :pause
+
+:err_activate
+echo [ERROR] Не удалось активировать .venv
+goto :pause
+
+:err_requirements
+echo [ERROR] Не удалось установить зависимости.
+goto :pause
+
+:err_setup
+echo [ERROR] setup_local.py завершился с ошибкой.
+goto :pause
+
+:err_uvicorn
+echo [ERROR] Uvicorn завершился с ошибкой.
+goto :pause
+
+:ok
 echo.
-echo Нажмите любую клавишу, чтобы закрыть окно...
+echo Готово.
+set "EXIT_CODE=0"
+goto :pause
+
+:pause
+echo Для продолжения нажмите любую клавишу . . .
 pause >nul
-exit /b 1
+if not defined EXIT_CODE set "EXIT_CODE=1"
+exit /b %EXIT_CODE%
