@@ -53,6 +53,11 @@ python app.py
 
 Открыть: http://127.0.0.1:8000
 
+## 5.1) Smoke-проверка транзакций
+```bash
+python smoke_test_transactions.py
+```
+
 ## 6) Страницы
 - `/` — dashboard
 - `/requests` — заявки

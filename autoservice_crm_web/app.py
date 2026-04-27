@@ -1,5 +1,6 @@
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
+import logging
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -29,6 +30,7 @@ from models import (
     ServiceRequest,
     ServiceSlot,
     ServiceVisit,
+    ServiceVisitHistory,
     SMSTemplate,
     WorkOrder,
     WorkOrderItem,
@@ -39,6 +41,7 @@ from schemas import IncomingRequestSchema
 from services import (
     change_request_status,
     create_request_with_relations,
+    bump_followup,
     format_phone_ru,
     normalize_phone,
     scenario_not_reached,
@@ -50,6 +53,7 @@ app = FastAPI(title="Autoservice CRM")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["phone_ru"] = format_phone_ru
+logger = logging.getLogger(__name__)
 
 DEFAULT_WORK_START = "09:00"
 DEFAULT_WORK_END = "19:00"
@@ -155,6 +159,29 @@ def none_if_empty(value):
     if isinstance(value, str) and value.strip() == "":
         return None
     return value
+
+
+def normalize_nullable_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def changed(old, new) -> bool:
+    return old != new
+
+
+def safe_commit(db: Session):
+    db.commit()
+
+
+def rollback_and_raise(db: Session, exc: Exception, public_message: str = "Внутренняя ошибка сервера"):
+    db.rollback()
+    if isinstance(exc, HTTPException):
+        raise exc
+    logger.exception("DB transaction failed: %s", exc)
+    raise HTTPException(status_code=500, detail=public_message)
 
 
 def normalize_dt_for_planner(dt: datetime | None) -> datetime | None:
@@ -300,8 +327,8 @@ def requests_page(request: Request, q: str = "", status: str = "", only_today: b
 
 
 @app.get("/requests/new")
-def request_new_form(request: Request):
-    return templates.TemplateResponse("request_new.html", {"request": request})
+def request_new_form(request: Request, error: str = ""):
+    return templates.TemplateResponse("request_new.html", {"request": request, "error": error})
 
 
 @app.post("/requests/new")
@@ -339,15 +366,20 @@ def request_new(
         "source_system": "manual",
     }
     try:
-        with db.begin():
-            req, warning = create_request_with_relations(db, payload)
+        req, warning = create_request_with_relations(db, payload)
+        db.flush()
+        safe_commit(db)
         url = f"/requests/{req.request_id}"
         if warning:
             url += "?msg=" + warning
         return RedirectResponse(url=url, status_code=303)
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
-        return templates.TemplateResponse("request_new.html", {"request": request, "error": f"Ошибка сохранения: {e}"})
+        logger.exception("request_new failed: %s", e)
+        return RedirectResponse(url="/requests/new?error=Не удалось сохранить заявку", status_code=303)
 
 
 @app.get("/requests/{request_id}")
@@ -369,7 +401,7 @@ def request_status_action(request_id: int, action: str = Form(...), db: Session 
     req = db.get(ServiceRequest, request_id)
     if not req:
         raise HTTPException(404, "Заявка не найдена")
-    with db.begin():
+    try:
         if action == "not_reached":
             scenario_not_reached(db, req)
         elif action == "booked":
@@ -384,6 +416,14 @@ def request_status_action(request_id: int, action: str = Form(...), db: Session 
                 f.task_status = "Выполнено"
         else:
             raise HTTPException(400, "Неизвестное действие")
+        safe_commit(db)
+    except HTTPException as e:
+        db.rollback()
+        return RedirectResponse(f"/requests/{request_id}?msg={e.detail}", status_code=303)
+    except Exception as e:
+        db.rollback()
+        logger.exception("request_status_action failed: %s", e)
+        return RedirectResponse(f"/requests/{request_id}?msg=Ошибка изменения статуса", status_code=303)
     return RedirectResponse(f"/requests/{request_id}", status_code=303)
 
 
@@ -398,8 +438,8 @@ def clients_page(request: Request, q: str = "", db: Session = Depends(get_db)):
 
 
 @app.get("/clients/new")
-def client_new_form(request: Request):
-    return templates.TemplateResponse("client_new.html", {"request": request})
+def client_new_form(request: Request, error: str = ""):
+    return templates.TemplateResponse("client_new.html", {"request": request, "error": error})
 
 
 @app.post("/clients/new")
@@ -414,7 +454,7 @@ def client_new(
 ):
     phone_n = normalize_phone(phone_raw)
     phone_fmt = format_phone_ru(phone_raw)
-    with db.begin():
+    try:
         exists = db.execute(select(Client).where(Client.phone_normalized == phone_n, func.lower(func.trim(Client.full_name)) == full_name.strip().lower())).scalar_one_or_none()
         if exists:
             return RedirectResponse(f"/clients/{exists.client_id}", status_code=303)
@@ -429,6 +469,14 @@ def client_new(
         )
         db.add(client)
         db.flush()
+        safe_commit(db)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("client_new failed: %s", e)
+        return RedirectResponse("/clients/new?error=Не удалось создать клиента", status_code=303)
     return RedirectResponse(f"/clients/{client.client_id}", status_code=303)
 
 
@@ -449,8 +497,13 @@ def save_client_comment(client_id: int, manager_comment: str = Form(default=""),
     client = db.get(Client, client_id)
     if not client:
         raise HTTPException(404, "Клиент не найден")
-    with db.begin():
-        update_client_comment(db, client, manager_comment or None, client_tone, client_tags or None)
+    try:
+        update_client_comment(db, client, normalize_nullable_text(manager_comment), client_tone, normalize_nullable_text(client_tags))
+        safe_commit(db)
+    except Exception as e:
+        db.rollback()
+        logger.exception("save_client_comment failed: %s", e)
+        return RedirectResponse(f"/clients/{client_id}?msg=Не удалось сохранить комментарий", status_code=303)
     return RedirectResponse(f"/clients/{client_id}", status_code=303)
 
 
@@ -480,7 +533,7 @@ def add_car_work(car_id: int, work_date: date = Form(...), employee_id: int | No
     car = db.get(Car, car_id)
     if not car:
         raise HTTPException(404, "Авто не найдено")
-    with db.begin():
+    try:
         employee = db.get(Employee, employee_id) if employee_id else None
         db.add(CarWorkHistory(
             car_id=car_id,
@@ -488,9 +541,14 @@ def add_car_work(car_id: int, work_date: date = Form(...), employee_id: int | No
             employee_id=employee_id,
             employee_number=f"{employee.full_name} ({employee.employee_number})" if employee else None,
             work_summary=work_summary,
-            comment=comment or None,
+            comment=normalize_nullable_text(comment),
             created_by="manager",
         ))
+        safe_commit(db)
+    except Exception as e:
+        db.rollback()
+        logger.exception("add_car_work failed: %s", e)
+        return RedirectResponse(f"/cars/{car_id}?msg=Не удалось добавить запись работ", status_code=303)
     return RedirectResponse(f"/cars/{car_id}", status_code=303)
 
 
@@ -530,14 +588,49 @@ def _sync_service_slot(db: Session, visit: ServiceVisit):
     slot.employee_id = visit.assigned_employee_id
 
 
+def _log_service_visit_history_if_changed(
+    db: Session,
+    visit: ServiceVisit,
+    old_status: str,
+    old_start: datetime | None,
+    old_end: datetime | None,
+    old_employee: str | None,
+    old_bay: int | None,
+):
+    if not any([
+        changed(old_status, visit.visit_status),
+        changed(old_start, visit.planned_start_at),
+        changed(old_end, visit.planned_end_at),
+        changed(old_employee, visit.assigned_employee_number),
+        changed(old_bay, visit.service_bay_id),
+    ]):
+        return
+    db.add(ServiceVisitHistory(
+        visit_id=visit.visit_id,
+        old_visit_status=old_status,
+        new_visit_status=visit.visit_status,
+        changed_by="manager",
+        service_comment=visit.service_comment,
+        planned_start_at=visit.planned_start_at,
+        planned_end_at=visit.planned_end_at,
+        assigned_employee_number=visit.assigned_employee_number,
+        service_bay_id=visit.service_bay_id,
+    ))
+
+
 @app.get("/planner")
 def planner(request: Request, day: date | None = None, error: str = "", db: Session = Depends(get_db)):
     d = day or date.today()
     start_t, end_t, step_min, time_points = get_working_grid(db)
     bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True)).order_by(ServiceBay.bay_name)).scalars().all()
     if not bays:
-        with db.begin():
+        try:
             db.add_all([ServiceBay(bay_name="Пост 1"), ServiceBay(bay_name="Пост 2"), ServiceBay(bay_name="Диагностика")])
+            safe_commit(db)
+        except Exception as e:
+            db.rollback()
+            logger.exception("planner init bays failed: %s", e)
+            error = error or "Не удалось инициализировать посты"
         bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True)).order_by(ServiceBay.bay_name)).scalars().all()
     day_start = datetime.combine(d, start_t)
     day_end = datetime.combine(d, end_t)
@@ -669,7 +762,7 @@ def create_service_visit(
     st = datetime.strptime(start_time, "%H:%M").time()
     et = datetime.strptime(end_time, "%H:%M").time()
     if et <= st:
-        raise HTTPException(400, "Время окончания должно быть позже начала")
+        return RedirectResponse(f"/planner?day={day.isoformat()}&error=Время окончания должно быть позже начала", status_code=303)
     start_dt = datetime.combine(day, st)
     end_dt = datetime.combine(day, et)
     try:
@@ -698,11 +791,13 @@ def create_service_visit(
             req = db.get(ServiceRequest, request_id)
             if req:
                 change_request_status(db, req, "Записан", comment="Запись через планер")
-        db.commit()
+        safe_commit(db)
     except HTTPException as e:
-        return RedirectResponse(f"/planner?day={day.isoformat()}&error={e.detail}", status_code=303)
-    except Exception:
         db.rollback()
+        return RedirectResponse(f"/planner?day={day.isoformat()}&error={e.detail}", status_code=303)
+    except Exception as e:
+        db.rollback()
+        logger.exception("create_service_visit failed: %s", e)
         return RedirectResponse(f"/planner?day={day.isoformat()}&error=Не удалось создать визит", status_code=303)
     return RedirectResponse(f"/planner?day={day.isoformat()}", status_code=303)
 
@@ -729,11 +824,18 @@ def update_visit_common(visit_id: int, payload: dict, db: Session):
     service_bay_id = int(payload["service_bay_id"])
     employee_id = int(payload["employee_id"]) if payload.get("employee_id") else None
     try:
+        old_status = visit.visit_status
+        old_start = visit.planned_start_at
+        old_end = visit.planned_end_at
+        old_employee = visit.assigned_employee_number
+        old_bay = visit.service_bay_id
         _check_visit_overlap(db, start_dt, end_dt, service_bay_id, employee_id, exclude_visit_id=visit_id)
+        employee = db.get(Employee, employee_id) if employee_id else None
         visit.planned_start_at = start_dt
         visit.planned_end_at = end_dt
         visit.service_bay_id = service_bay_id
         visit.assigned_employee_id = employee_id
+        visit.assigned_employee_number = employee.full_name if employee else None
         visit.client_id = int(payload["client_id"]) if payload.get("client_id") else visit.client_id
         visit.car_id = int(payload["car_id"]) if payload.get("car_id") else visit.car_id
         visit.problem_description = none_if_empty(payload.get("problem_description")) or visit.problem_description
@@ -741,12 +843,15 @@ def update_visit_common(visit_id: int, payload: dict, db: Session):
         visit.service_comment = none_if_empty(payload.get("service_comment"))
         visit.visit_status = none_if_empty(payload.get("visit_status")) or visit.visit_status
         _sync_service_slot(db, visit)
-        db.commit()
+        _log_service_visit_history_if_changed(db, visit, old_status, old_start, old_end, old_employee, old_bay)
+        safe_commit(db)
         return {"ok": True, "visit": {"visit_id": visit.visit_id, "service_bay_id": visit.service_bay_id, "start_time": st.strftime("%H:%M"), "end_time": et.strftime("%H:%M")}}
     except HTTPException as e:
-        return {"ok": False, "error": e.detail}
-    except Exception:
         db.rollback()
+        return {"ok": False, "error": e.detail}
+    except Exception as e:
+        db.rollback()
+        logger.exception("update_visit_common failed: %s", e)
         return {"ok": False, "error": "Не удалось сохранить запись"}
 
 
@@ -764,13 +869,18 @@ def api_update_visit(visit_id: int, payload: dict, db: Session = Depends(get_db)
 def delete_service_visit_api(visit_id: int, db: Session = Depends(get_db)):
     visit = db.get(ServiceVisit, visit_id)
     if not visit:
-        raise HTTPException(404, "Визит не найден")
-    with db.begin():
+        return {"ok": False, "error": "Визит не найден"}
+    try:
         slot = db.execute(select(ServiceSlot).where(ServiceSlot.visit_id == visit_id)).scalar_one_or_none()
         if slot:
             db.delete(slot)
         db.delete(visit)
-    return {"ok": True}
+        safe_commit(db)
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        logger.exception("delete_service_visit_api failed: %s", e)
+        return {"ok": False, "error": "Не удалось удалить визит"}
 
 
 @app.get("/service_visits/{visit_id}")
@@ -802,10 +912,10 @@ def followups_page(request: Request, only_open: bool = True, only_overdue: bool 
 
 
 @app.get("/followups/new")
-def followup_new_form(request: Request, db: Session = Depends(get_db)):
+def followup_new_form(request: Request, error: str = "", db: Session = Depends(get_db)):
     clients = db.execute(select(Client).where(Client.is_active.is_(True)).order_by(Client.full_name).limit(300)).scalars().all()
     cars = db.execute(select(Car).where(Car.is_active.is_(True)).order_by(Car.car_id.desc()).limit(500)).scalars().all()
-    return templates.TemplateResponse("followup_new.html", {"request": request, "clients": clients, "cars": cars, "today": date.today()})
+    return templates.TemplateResponse("followup_new.html", {"request": request, "clients": clients, "cars": cars, "today": date.today(), "error": error})
 
 
 @app.post("/followups/new")
@@ -819,20 +929,25 @@ def followup_new(
     preferred_contact_slot: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
-    client_id = int(str(client_id).split("|")[0].strip())
-    f = Followup(
-        client_id=client_id,
-        car_id=int(car_id) if none_if_empty(car_id) else None,
-        task_type=task_type.strip(),
-        due_date=due_date,
-        title=title.strip(),
-        description=none_if_empty(description.strip()),
-        preferred_contact_slot=none_if_empty(preferred_contact_slot.strip()),
-        task_status="Открыто",
-    )
-    db.add(f)
-    db.commit()
-    return RedirectResponse("/followups", status_code=303)
+    try:
+        client_id = int(str(client_id).split("|")[0].strip())
+        f = Followup(
+            client_id=client_id,
+            car_id=int(car_id) if none_if_empty(car_id) else None,
+            task_type=task_type.strip(),
+            due_date=due_date,
+            title=title.strip(),
+            description=none_if_empty(description.strip()),
+            preferred_contact_slot=none_if_empty(preferred_contact_slot.strip()),
+            task_status="Открыто",
+        )
+        db.add(f)
+        safe_commit(db)
+        return RedirectResponse("/followups", status_code=303)
+    except Exception as e:
+        db.rollback()
+        logger.exception("followup_new failed: %s", e)
+        return RedirectResponse("/followups/new?error=Не удалось создать напоминание", status_code=303)
 
 
 @app.get("/followups/{followup_id}/sms-preview")
@@ -853,10 +968,14 @@ def followup_done(followup_id: int, db: Session = Depends(get_db)):
     f = db.get(Followup, followup_id)
     if not f:
         raise HTTPException(404, "Напоминание не найдено")
-    f.task_status = "Выполнено"
-    f.completed_at = datetime.utcnow()
-    db.commit()
-    return RedirectResponse("/followups", status_code=303)
+    try:
+        bump_followup(db, f, "Выполнено", description="Выполнено пользователем")
+        safe_commit(db)
+        return RedirectResponse("/followups", status_code=303)
+    except Exception as e:
+        db.rollback()
+        logger.exception("followup_done failed: %s", e)
+        return RedirectResponse("/followups?error=Не удалось завершить напоминание", status_code=303)
 
 
 @app.get("/employees")
@@ -888,14 +1007,19 @@ def employee_update(
     employee = db.get(Employee, employee_id)
     if not employee:
         raise HTTPException(404, "Сотрудник не найден")
-    with db.begin():
+    try:
         employee.full_name = full_name.strip()
         employee.role = role.strip()
-        employee.phone = none_if_empty(phone.strip())
+        employee.phone = normalize_nullable_text(phone)
         employee.birth_date = birth_date
         employee.hourly_rate = float(hourly_rate) if none_if_empty(hourly_rate) else None
-        employee.specialization = none_if_empty(specialization.strip())
-        employee.comments = none_if_empty(comments.strip())
+        employee.specialization = normalize_nullable_text(specialization)
+        employee.comments = normalize_nullable_text(comments)
+        safe_commit(db)
+    except Exception as e:
+        db.rollback()
+        logger.exception("employee_update failed: %s", e)
+        return RedirectResponse(f"/employees/{employee_id}?error=Не удалось обновить сотрудника", status_code=303)
     return RedirectResponse(f"/employees/{employee_id}", status_code=303)
 
 
@@ -911,7 +1035,7 @@ def employees_new(
     comments: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
-    with db.begin():
+    try:
         exists = db.execute(select(Employee).where(Employee.employee_number == employee_number.strip())).scalar_one_or_none()
         if exists:
             raise HTTPException(400, "Сотрудник с таким табельным номером уже существует")
@@ -919,12 +1043,20 @@ def employees_new(
             employee_number=employee_number.strip(),
             full_name=full_name.strip(),
             role=role.strip(),
-            phone=phone.strip() or None,
+            phone=normalize_nullable_text(phone),
             birth_date=birth_date,
             hourly_rate=float(hourly_rate) if none_if_empty(hourly_rate) else None,
-            specialization=specialization.strip() or None,
-            comments=comments.strip() or None,
+            specialization=normalize_nullable_text(specialization),
+            comments=normalize_nullable_text(comments),
         ))
+        safe_commit(db)
+    except HTTPException as e:
+        db.rollback()
+        return RedirectResponse(f"/employees?error={e.detail}", status_code=303)
+    except Exception as e:
+        db.rollback()
+        logger.exception("employees_new failed: %s", e)
+        return RedirectResponse("/employees?error=Не удалось создать сотрудника", status_code=303)
     return RedirectResponse("/employees", status_code=303)
 
 
@@ -1005,12 +1137,12 @@ def work_orders_page(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/work-orders/new")
-def work_order_new_form(request: Request, db: Session = Depends(get_db)):
+def work_order_new_form(request: Request, error: str = "", db: Session = Depends(get_db)):
     clients = db.execute(select(Client).where(Client.is_active.is_(True)).order_by(Client.full_name).limit(300)).scalars().all()
     cars = db.execute(select(Car).where(Car.is_active.is_(True)).order_by(Car.car_id.desc()).limit(500)).scalars().all()
     employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
     bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True))).scalars().all()
-    return templates.TemplateResponse("work_order_new.html", {"request": request, "clients": clients, "cars": cars, "employees": employees, "bays": bays})
+    return templates.TemplateResponse("work_order_new.html", {"request": request, "clients": clients, "cars": cars, "employees": employees, "bays": bays, "error": error})
 
 
 @app.post("/work-orders/new")
@@ -1022,7 +1154,7 @@ def work_order_new(
     comment: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
-    with db.begin():
+    try:
         order_number = f"WO-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
         wo = WorkOrder(
             order_number=order_number,
@@ -1036,6 +1168,11 @@ def work_order_new(
         db.add(wo)
         db.flush()
         db.add(WorkOrderStatusHistory(work_order_id=wo.work_order_id, old_status=None, new_status="Создан", changed_by="manager"))
+        safe_commit(db)
+    except Exception as e:
+        db.rollback()
+        logger.exception("work_order_new failed: %s", e)
+        return RedirectResponse("/work-orders/new?error=Не удалось создать заказ-наряд", status_code=303)
     return RedirectResponse(f"/work-orders/{wo.work_order_id}", status_code=303)
 
 
@@ -1116,11 +1253,16 @@ def add_work_order_item(work_order_id: int, work_type: str = Form(...), descript
     wo = db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(404, "Заказ-наряд не найден")
-    with db.begin():
+    try:
         line_total = qty * unit_price
         line_cost = qty * unit_cost
         db.add(WorkOrderItem(work_order_id=work_order_id, work_type=work_type, description=none_if_empty(description), qty=qty, unit_price=unit_price, unit_cost=unit_cost, line_total=line_total, line_cost=line_cost, line_profit=line_total - line_cost))
         recalc_work_order_totals(db, wo)
+        safe_commit(db)
+    except Exception as e:
+        db.rollback()
+        logger.exception("add_work_order_item failed: %s", e)
+        return RedirectResponse(f"/work-orders/{work_order_id}?error=Не удалось добавить работу", status_code=303)
     return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
 
 
@@ -1129,11 +1271,16 @@ def add_work_order_part(work_order_id: int, part_name: str = Form(...), qty: flo
     wo = db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(404, "Заказ-наряд не найден")
-    with db.begin():
+    try:
         line_total = qty * sale_price
         line_cost = qty * cost_price
         db.add(WorkOrderPart(work_order_id=work_order_id, part_name=part_name, qty=qty, sale_price=sale_price, cost_price=cost_price, line_total=line_total, line_cost=line_cost, line_profit=line_total - line_cost))
         recalc_work_order_totals(db, wo)
+        safe_commit(db)
+    except Exception as e:
+        db.rollback()
+        logger.exception("add_work_order_part failed: %s", e)
+        return RedirectResponse(f"/work-orders/{work_order_id}?error=Не удалось добавить запчасть", status_code=303)
     return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
 
 
@@ -1152,10 +1299,11 @@ def update_work_order_status(work_order_id: int, status: str = Form(...), db: Se
             for days, title in [(7, "Проверить результат ремонта"), (30, "Плановый follow-up после ремонта")]:
                 db.add(Followup(client_id=wo.client_id, car_id=wo.car_id, task_type="repair_followup", title=title, description=f"Авто-follow-up по заказ-наряду {wo.order_number}", due_date=(date.today() + timedelta(days=days))))
         db.add(WorkOrderStatusHistory(work_order_id=work_order_id, old_status=old, new_status=status, changed_by="manager"))
-        db.commit()
-    except Exception:
+        safe_commit(db)
+    except Exception as e:
         db.rollback()
-        raise
+        logger.exception("update_work_order_status failed: %s", e)
+        return RedirectResponse(f"/work-orders/{work_order_id}?error=Не удалось изменить статус", status_code=303)
     return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
 
 
@@ -1214,7 +1362,7 @@ def update_work_hours(
     slot_step_minutes: int = Form(...),
     db: Session = Depends(get_db),
 ):
-    with db.begin():
+    try:
         for key, value, desc in [
             ("workday_start", workday_start, "Начало рабочего дня"),
             ("workday_end", workday_end, "Конец рабочего дня"),
@@ -1226,6 +1374,11 @@ def update_work_hours(
                 db.add(row)
             else:
                 row.setting_value = value
+        safe_commit(db)
+    except Exception as e:
+        db.rollback()
+        logger.exception("update_work_hours failed: %s", e)
+        return RedirectResponse("/settings?error=Не удалось сохранить настройки", status_code=303)
     return RedirectResponse("/settings", status_code=303)
 
 
@@ -1236,9 +1389,18 @@ def api_incoming_request(payload: IncomingRequestSchema, db: Session = Depends(g
     data["phone_raw"] = format_phone_ru(data["phone_raw"])
     data["personal_data_consent"] = True
     data["source_system"] = data.get("source_system") or "web_form"
-    with db.begin():
+    try:
         req, warning = create_request_with_relations(db, data, created_by="api")
-    return {"ok": True, "request_id": req.request_id, "warning": warning, "phone_normalized": normalize_phone(data["phone_raw"])}
+        db.flush()
+        safe_commit(db)
+        return {"ok": True, "request_id": req.request_id, "warning": warning, "phone_normalized": normalize_phone(data["phone_raw"])}
+    except HTTPException as e:
+        db.rollback()
+        return {"ok": False, "error": e.detail}
+    except Exception as e:
+        db.rollback()
+        logger.exception("api_incoming_request failed: %s", e)
+        return {"ok": False, "error": "Не удалось создать заявку"}
 
 
 if __name__ == "__main__":
