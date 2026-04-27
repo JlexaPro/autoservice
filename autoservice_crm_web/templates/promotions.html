@@ -1,0 +1,7 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Акции</h1>
+<p>Заготовка страницы для повторных продаж и таргетинга по тегам/маркам.</p>
+<table><tr><th>Название</th><th>Период</th><th>Активна</th></tr>
+{% for p in rows %}<tr><td>{{ p.title }}</td><td>{{ p.starts_at }} — {{ p.ends_at }}</td><td>{{ 'Да' if p.is_active else 'Нет' }}</td></tr>{% endfor %}</table>
+{% endblock %}

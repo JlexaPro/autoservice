@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>{{ client.full_name }}</h1>
+<p>{{ client.phone_raw|phone_ru }} | {{ client.email or '' }}</p>
+<h3>Комментарий по клиенту</h3>
+<form method="post" action="/clients/{{ client.client_id }}/comment" class="form-grid">
+  <label>Метка
+    <select name="client_tone">
+      {% for t in ['Новый','Нейтральный','Хороший','Сложный'] %}
+      <option {% if client.client_tone==t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Теги <input name="client_tags" value="{{ client.client_tags or '' }}"></label>
+  <label>Комментарий <textarea name="manager_comment">{{ client.manager_comment or '' }}</textarea></label>
+  <button class="btn">Сохранить</button>
+</form>
+<h3>Машины</h3>
+<ul>{% for car in cars %}<li><a href="/cars/{{ car.car_id }}">{{ car.brand }} {{ car.model }} {{ car.plate_number }}</a></li>{% endfor %}</ul>
+<h3>Заявки</h3>
+<ul>{% for r in reqs %}<li><a href="/requests/{{ r.request_id }}">#{{ r.request_id }}</a> — {{ r.request_status }}</li>{% endfor %}</ul>
+<h3>Напоминания</h3>
+<ul>{% for f in followups %}<li>{{ f.due_date }} {{ f.task_status }} — {{ f.title }}</li>{% endfor %}</ul>
+<h3>История комментариев</h3>
+<ul>{% for h in history %}<li>{{ h.changed_at }}: {{ h.old_tone }}→{{ h.new_tone }}; {{ h.old_tags or '' }}→{{ h.new_tags or '' }}</li>{% endfor %}</ul>
+{% endblock %}

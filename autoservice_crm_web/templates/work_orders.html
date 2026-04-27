@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Заказ-наряды</h1>
+<p><a class="btn" href="/work-orders/new">+ Новый заказ-наряд</a></p>
+<table><tr><th>Номер</th><th>Дата</th><th>Статус</th><th>Клиент</th><th>Авто</th><th>Сумма</th><th>Прибыль</th></tr>
+{% for wo,c,car in rows %}<tr><td><a href="/work-orders/{{ wo.work_order_id }}">{{ wo.order_number }}</a></td><td>{{ wo.opened_at }}</td><td>{{ wo.status }}</td><td>{{ c.full_name }}</td><td>{{ car.brand }} {{ car.model }}</td><td>{{ wo.total_amount }}</td><td>{{ wo.total_profit }}</td></tr>{% endfor %}
+</table>
+{% endblock %}

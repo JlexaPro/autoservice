@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Настройки</h1>
+<form method="post" action="/settings/work-hours" class="form-grid">
+  <label>Начало рабочего дня <input type="time" name="workday_start" value="{{ workday_start }}" required></label>
+  <label>Конец рабочего дня <input type="time" name="workday_end" value="{{ workday_end }}" required></label>
+  <label>Шаг сетки (мин) <input type="number" name="slot_step_minutes" min="15" step="15" value="{{ slot_step_minutes }}" required></label>
+  <button class="btn">Сохранить настройки</button>
+</form>
+{% endblock %}

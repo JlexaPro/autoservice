@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Новый заказ-наряд</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" class="form-grid">
+  <label>Клиент <select name="client_id">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }} ({{ c.phone_raw|phone_ru }})</option>{% endfor %}</select></label>
+  <label>Авто <select name="car_id">{% for car in cars %}<option value="{{ car.car_id }}">{{ car.brand }} {{ car.model }} {{ car.plate_number }}</option>{% endfor %}</select></label>
+  <label>Мастер <select name="assigned_employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select></label>
+  <label>Пост <select name="service_bay_id"><option value="">Без поста</option>{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select></label>
+  <label>Комментарий <textarea name="comment"></textarea></label>
+  <button class="btn">Создать</button>
+</form>
+{% endblock %}
