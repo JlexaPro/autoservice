@@ -1,2 +1,7 @@
 __pycache__/
 *.pyc
+.venv/
+*.log
+autoservice_crm_web/.env
+autoservice_crm_web/logs/
+backups/

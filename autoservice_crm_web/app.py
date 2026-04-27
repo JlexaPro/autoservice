@@ -15,7 +15,9 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+from config import get_settings
 from db import get_db
+from logging_setup import setup_logging
 from models import (
     Car,
     CarWorkHistory,
@@ -50,11 +52,13 @@ from services import (
 )
 
 BASE_DIR = Path(__file__).parent
+settings = get_settings()
+setup_logging()
 app = FastAPI(title="Autoservice CRM")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["phone_ru"] = format_phone_ru
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(settings.logger)
 
 DEFAULT_WORK_START = "09:00"
 DEFAULT_WORK_END = "19:00"
@@ -64,6 +68,7 @@ DEFAULT_SLOT_STEP_MIN = 30
 @app.on_event("startup")
 def startup_migrations():
     from db import engine
+    logger.info("Запуск приложения Autoservice CRM. Режим локальный: http://%s:%s", settings.host, settings.port)
     stmts = [
         "ALTER TABLE app.employees ADD COLUMN IF NOT EXISTS birth_date date",
         "ALTER TABLE app.employees ADD COLUMN IF NOT EXISTS hourly_rate numeric(12,2)",
@@ -130,6 +135,7 @@ def startup_migrations():
             FROM n
             WHERE sr.request_id = n.request_id
         """))
+    logger.info("Проверка стартовых миграций завершена успешно")
 
 
 def get_setting(db: Session, key: str, default: str) -> str:
@@ -370,6 +376,7 @@ def request_new(
         req, warning = create_request_with_relations(db, payload)
         db.flush()
         safe_commit(db)
+        logger.info("Создана заявка #%s вручную (client_id=%s, car_id=%s)", req.request_id, req.client_id, req.car_id)
         url = f"/requests/{req.request_id}"
         if warning:
             url += "?msg=" + warning
@@ -890,6 +897,15 @@ def create_service_visit(
             if req:
                 change_request_status(db, req, "Записан", comment="Запись через планер")
         safe_commit(db)
+        logger.info(
+            "Создан визит #%s (request_id=%s, client_id=%s, bay_id=%s, %s-%s)",
+            visit.visit_id,
+            visit.request_id,
+            visit.client_id,
+            visit.service_bay_id,
+            visit.planned_start_at,
+            visit.planned_end_at,
+        )
     except HTTPException as e:
         db.rollback()
         return RedirectResponse(f"/planner?day={day.isoformat()}&error={e.detail}", status_code=303)
@@ -1620,6 +1636,14 @@ def update_work_order_status(
                 due_date=(date.today() + timedelta(days=90)),
                 task_status="Открыто",
             ))
+            logger.info(
+                "Закрыт заказ-наряд #%s (%s), сумма=%.2f, оплачено_до=%.2f, добавлено_при_закрытии=%.2f",
+                wo.work_order_id,
+                wo.order_number,
+                float(wo.total_amount or 0),
+                float(paid_before),
+                float(amount),
+            )
         db.add(WorkOrderStatusHistory(work_order_id=work_order_id, old_status=old, new_status=status, changed_by="manager"))
         safe_commit(db)
     except Exception as e:
@@ -1715,6 +1739,7 @@ def api_incoming_request(payload: IncomingRequestSchema, db: Session = Depends(g
         req, warning = create_request_with_relations(db, data, created_by="api")
         db.flush()
         safe_commit(db)
+        logger.info("Создана заявка #%s через API (source=%s)", req.request_id, data.get("source_system"))
         return {"ok": True, "request_id": req.request_id, "warning": warning, "phone_normalized": normalize_phone(data["phone_raw"])}
     except HTTPException as e:
         db.rollback()
@@ -1728,4 +1753,4 @@ def api_incoming_request(payload: IncomingRequestSchema, db: Session = Depends(g
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("app:app", host=settings.host, port=settings.port, reload=settings.reload)

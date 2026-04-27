@@ -1,94 +1,222 @@
-# Autoservice CRM Web (локальный MVP)
+# Autoservice CRM Web — запуск для владельца автосервиса (Windows, локально)
 
-## 1) Установка
-```bash
+Ниже инструкция для ежедневной работы **без Docker и без правки кода**.
+
+---
+
+## 1) Установка Python
+
+1. Скачайте Python 3.11+ с официального сайта: https://www.python.org/downloads/windows/
+2. При установке обязательно включите галочку **Add Python to PATH**.
+3. Проверьте в `cmd`:
+
+```bat
+python --version
+pip --version
+```
+
+---
+
+## 2) Подготовка проекта и виртуального окружения
+
+Откройте `cmd` и выполните (из папки `autoservice_crm_web`):
+
+```bat
+cd C:\path\to\autoservice\autoservice_crm_web
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## 2) Создание БД и схемы
-```bash
+---
+
+## 3) Настройка переменных (.env)
+
+1. Скопируйте шаблон:
+
+```bat
+copy .env.example .env
+```
+
+2. Откройте `.env` и укажите свои параметры PostgreSQL:
+
+```env
+DATABASE_URL=postgresql+psycopg2://postgres:123@localhost:5432/postgres
+APP_HOST=127.0.0.1
+APP_PORT=8000
+APP_RELOAD=false
+APP_LOG_FILE=logs/app.log
+```
+
+> Важно: приложение по умолчанию слушает только `127.0.0.1` (локальный режим).
+
+---
+
+## 4) Создание БД и применение схемы
+
+Если БД ещё не подготовлена:
+
+```bat
 createdb autoservice_crm
 psql -d autoservice_crm -f ddl.sql
 psql -d autoservice_crm -f migration_patch_current.sql
 ```
 
-Если пользователь/пароль/хост отличаются, задайте:
-```bash
-export DATABASE_URL='postgresql+psycopg2://postgres:postgres@localhost:5432/autoservice_crm'
+Если у вас другой пользователь/пароль/хост — используйте `DATABASE_URL` из `.env`.
+
+---
+
+## 5) Проверка приложения перед запуском
+
+```bat
+python check_app.py
 ```
 
-## 3) Проверка схемы
-После применения DDL и patch запустите диагностику соответствия `models.py` и реальной БД:
-```bash
+Скрипт проверяет:
+- подключение к БД;
+- количество таблиц в схеме `app`;
+- ключевые таблицы;
+- ключевые колонки.
+
+Если всё хорошо — увидите `OK`.
+
+---
+
+## 6) Ежедневный запуск (рекомендуется)
+
+Из корня проекта запустите:
+
+```bat
+start_crm.bat
+```
+
+Скрипт автоматически:
+1. переходит в папку проекта;
+2. активирует `.venv`;
+3. проверяет зависимости;
+4. запускает `check_app.py`;
+5. освобождает порт 8000 при необходимости;
+6. запускает Uvicorn на `127.0.0.1:8000`.
+
+Открыть в браузере:
+
+```text
+http://127.0.0.1:8000
+```
+
+---
+
+## 7) Backup базы
+
+Из корня проекта:
+
+```bat
+backup_db.bat
+```
+
+Что делает скрипт:
+- выполняет `pg_dump`;
+- сохраняет файл в папку `backups`;
+- имя файла: `autoservice_backup_YYYYMMDD_HHMMSS.sql`;
+- оставляет только последние 14 backup-файлов.
+
+---
+
+## 8) Восстановление из backup
+
+Вариант 1: восстановить из последнего backup:
+
+```bat
+restore_db.bat
+```
+
+Вариант 2: указать конкретный файл:
+
+```bat
+restore_db.bat C:\path\to\autoservice_backup_20260427_101010.sql
+```
+
+---
+
+## 9) Логи
+
+Логи пишутся:
+- в консоль;
+- в файл `logs/app.log`.
+
+Дополнительно backup-операции пишутся в `logs/backup.log` и `logs/app.log`.
+
+Что логируется:
+- запуск приложения;
+- ошибки БД;
+- создание заявки;
+- создание визита;
+- закрытие заказ-наряда;
+- backup БД.
+
+---
+
+## 10) Что делать при проблемах
+
+### Порт 8000 занят
+- Используйте `start_crm.bat` — он сам завершает процесс на 8000.
+- Либо вручную:
+
+```bat
+netstat -ano | findstr :8000
+taskkill /PID <PID> /F
+```
+
+### Ошибка `missing column`
+1. Примените патч схемы:
+
+```bat
+psql -d autoservice_crm -f migration_patch_current.sql
+```
+
+2. Проверьте:
+
+```bat
+python check_app.py
 python check_schema.py
 ```
 
-## 4) (Опционально) Alembic
-В проект добавлен базовый Alembic-конфиг:
-- `alembic.ini`
-- `migrations/env.py`
-- baseline-ревизия `0001_baseline_existing_schema`
+### Сайт не открывается
+1. Убедитесь, что сервер запущен (`start_crm.bat` не закрылся с ошибкой).
+2. Проверьте URL: `http://127.0.0.1:8000`.
+3. Проверьте логи: `logs/app.log`.
+4. Проверьте БД и структуру:
 
-Для существующей БД (уже созданной через `ddl.sql` + `migration_patch_current.sql`) используйте:
-```bash
-alembic stamp head
+```bat
+python check_app.py
 ```
 
-Для проверки диффов модели/БД:
-```bash
-alembic revision --autogenerate -m "schema_sync_check"
+### Ошибка подключения к PostgreSQL
+- Проверьте, что служба PostgreSQL запущена.
+- Проверьте `DATABASE_URL` в `.env`.
+- Проверьте доступ вручную:
+
+```bat
+psql "postgresql://user:pass@localhost:5432/dbname" -c "select 1"
 ```
 
-Применение миграций:
-```bash
-alembic upgrade head
-```
+---
 
-## 5) Запуск
-```bash
-python app.py
-```
+## 11) Безопасность локального режима
 
-Открыть: http://127.0.0.1:8000
+- Приложение запускается только на `127.0.0.1`.
+- Для доступа извне нужна отдельная настройка сети/фаервола/реверс-прокси.
+- Пароль БД хранится в `.env` (единый источник), а не размазан по коду.
 
-## 5.1) Smoke-проверка транзакций
-```bash
+---
+
+## 12) Полезные команды
+
+```bat
+python check_app.py
+python check_schema.py
 python smoke_test_transactions.py
+start_crm.bat
+backup_db.bat
+restore_db.bat
 ```
-
-## 6) Страницы
-- `/` — dashboard
-- `/requests` — заявки
-- `/requests/new` — ручное добавление заявки
-- `/requests/{id}` — карточка заявки
-- `/clients` — клиенты
-- `/clients/{id}` — карточка клиента
-- `/cars/{id}` — карточка авто + работы
-- `/planner` — дневной планер
-- `/work-orders` — заказ-наряды
-- `/work-orders/new` — создание заказ-наряда
-- `/work-orders/{id}` — карточка заказ-наряда (работы, запчасти, прибыль)
-- `/work-orders/{id}/export.pdf` — печатный PDF заказ-наряда
-- `POST /service_visits` — создание визита из планера
-- `PUT /service_visits/{id}` — drag&drop / resize обновление визита
-- `DELETE /service_visits/{id}` — удаление визита
-- `/service_visits/{id}` — карточка визита
-- `PUT /api/visits/{id}/move` — перенос/resize визита с JSON-ответом
-- `PUT /api/visits/{id}` — редактирование визита из модалки
-- `GET /api/planner/auto-assign` — автоназначение поста/мастера
-- `/planner/conflicts` — диагностика конфликтов в планере
-- `/followups` — напоминания
-- `/finance` — финансы и прибыль
-- `/finance/export.xlsx` — выгрузка в Excel
-- `/employees` — сотрудники
-- `/employees/new` — добавление сотрудника
-- `/employees/{id}` — карточка сотрудника (ФИО, ДР, ставка, комментарии)
-- `/promotions` — акции (MVP)
-- `/settings` — настройки (MVP)
-- `/settings/work-hours` — настройка рабочего времени и шага сетки
-- `POST /api/incoming-request` — будущая интеграция онлайн-форм
-
-## 7) Руководство пользователя
-- Файл `USER_GUIDE.txt` — подробное описание всех страниц и функций для презентации владельцу/клиентам.

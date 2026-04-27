@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import create_engine, inspect, text
 
+from config import DEFAULT_DATABASE_URL
 from models import Base
 
 
@@ -24,7 +25,7 @@ def normalize_default(value: str | None) -> str:
 
 
 def main() -> int:
-    db_url = os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:123@localhost:5432/postgres")
+    db_url = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
     engine = create_engine(db_url, future=True)
 
     expected_tables = {
