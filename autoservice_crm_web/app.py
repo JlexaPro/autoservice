@@ -620,9 +620,18 @@ def _log_service_visit_history_if_changed(
 
 
 @app.get("/planner")
-def planner(request: Request, day: date | None = None, error: str = "", db: Session = Depends(get_db)):
+def planner(request: Request, day: date | None = None, error: str = "", grid_step: int | None = None, db: Session = Depends(get_db)):
     d = day or date.today()
     start_t, end_t, step_min, time_points = get_working_grid(db)
+    if grid_step in (30, 60):
+        step_min = grid_step
+        day_anchor = d
+        cur = datetime.combine(day_anchor, start_t)
+        end_dt = datetime.combine(day_anchor, end_t)
+        time_points = []
+        while cur < end_dt:
+            time_points.append(cur.time())
+            cur += timedelta(minutes=step_min)
     bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True)).order_by(ServiceBay.bay_name)).scalars().all()
     if not bays:
         try:
@@ -651,6 +660,7 @@ def planner(request: Request, day: date | None = None, error: str = "", db: Sess
         height = max(step_min, int((planned_end - planned_start).total_seconds() // 60))
         visit_blocks.append({
             "visit_id": visit.visit_id,
+            "request_id": visit.request_id,
             "bay_id": visit.service_bay_id,
             "top": top,
             "height": height,
@@ -662,6 +672,9 @@ def planner(request: Request, day: date | None = None, error: str = "", db: Sess
             "plate": car.plate_number,
             "problem": visit.problem_description,
             "work_type": visit.work_type,
+            "service_comment": visit.service_comment or "",
+            "work_cost": float(visit.work_cost or 0),
+            "master_profit": float(visit.master_profit or 0),
             "employee": visit.assigned_employee_number or "",
             "employee_id": visit.assigned_employee_id,
             "has_conflict": False,
@@ -692,7 +705,90 @@ def planner(request: Request, day: date | None = None, error: str = "", db: Sess
     for emp in employees:
         used = sum(v["height"] for v in visit_blocks if v.get("employee_id") == emp.employee_id)
         employee_load[emp.employee_id] = round((used / total_minutes) * 100, 1) if total_minutes else 0
-    return templates.TemplateResponse("planner.html", {"request": request, "day": d, "bays": bays, "times": [tp.strftime("%H:%M") for tp in time_points], "step_min": step_min, "visit_blocks": visit_blocks, "employees": employees, "clients": clients, "cars": cars, "start_time": start_t.strftime("%H:%M"), "day_minutes": total_minutes, "error": error, "bay_load": bay_load, "employee_load": employee_load})
+    free_windows = {}
+    for bay in bays:
+        bay_visits = sorted([v for v in visit_blocks if v["bay_id"] == bay.service_bay_id], key=lambda x: x["top"])
+        windows = []
+        cursor = 0
+        for visit in bay_visits:
+            if visit["top"] > cursor:
+                windows.append((cursor, visit["top"]))
+            cursor = max(cursor, visit["top"] + visit["height"])
+        if cursor < total_minutes:
+            windows.append((cursor, total_minutes))
+        formatted = []
+        for w_start, w_end in windows:
+            if w_end - w_start >= step_min:
+                ws = (datetime.combine(d, start_t) + timedelta(minutes=w_start)).strftime("%H:%M")
+                we = (datetime.combine(d, start_t) + timedelta(minutes=w_end)).strftime("%H:%M")
+                formatted.append(f"{ws}–{we}")
+        free_windows[bay.service_bay_id] = formatted
+    return templates.TemplateResponse("planner.html", {
+        "request": request,
+        "day": d,
+        "bays": bays,
+        "times": [tp.strftime("%H:%M") for tp in time_points],
+        "step_min": step_min,
+        "visit_blocks": visit_blocks,
+        "employees": employees,
+        "clients": clients,
+        "cars": cars,
+        "start_time": start_t.strftime("%H:%M"),
+        "day_minutes": total_minutes,
+        "error": error,
+        "bay_load": bay_load,
+        "employee_load": employee_load,
+        "today": date.today(),
+        "prev_day": d - timedelta(days=1),
+        "next_day": d + timedelta(days=1),
+        "tomorrow": date.today() + timedelta(days=1),
+        "free_windows": free_windows,
+    })
+
+
+@app.get("/planner/print")
+def planner_print(request: Request, day: date | None = None, db: Session = Depends(get_db)):
+    d = day or date.today()
+    rows = db.execute(
+        select(ServiceVisit, Client, Car, Employee, ServiceBay)
+        .join(Client, Client.client_id == ServiceVisit.client_id)
+        .join(Car, Car.car_id == ServiceVisit.car_id)
+        .join(Employee, Employee.employee_id == ServiceVisit.assigned_employee_id, isouter=True)
+        .join(ServiceBay, ServiceBay.service_bay_id == ServiceVisit.service_bay_id, isouter=True)
+        .where(cast(ServiceVisit.planned_start_at, Date) == d)
+        .order_by(ServiceVisit.service_bay_id, ServiceVisit.planned_start_at)
+    ).all()
+    return templates.TemplateResponse("planner_print.html", {"request": request, "day": d, "rows": rows})
+
+
+@app.post("/service_visits/{visit_id}/action")
+def service_visit_quick_action(visit_id: int, action: str = Form(...), day: date | None = Form(default=None), db: Session = Depends(get_db)):
+    visit = db.get(ServiceVisit, visit_id)
+    if not visit:
+        return RedirectResponse(f"/planner?error=Визит не найден", status_code=303)
+    try:
+        old_status = visit.visit_status
+        old_start = visit.planned_start_at
+        old_end = visit.planned_end_at
+        old_emp = visit.assigned_employee_number
+        old_bay = visit.service_bay_id
+        if action == "start":
+            visit.visit_status = "В работе"
+        elif action == "finish":
+            visit.visit_status = "Завершён"
+            visit.completed_at = datetime.utcnow()
+        elif action == "cancel":
+            visit.visit_status = "Отменён"
+        else:
+            return RedirectResponse(f"/planner?error=Неизвестное действие", status_code=303)
+        _log_service_visit_history_if_changed(db, visit, old_status, old_start, old_end, old_emp, old_bay)
+        safe_commit(db)
+    except Exception as e:
+        db.rollback()
+        logger.exception("service_visit_quick_action failed: %s", e)
+        return RedirectResponse(f"/planner?error=Не удалось изменить статус", status_code=303)
+    q_day = day.isoformat() if day else date.today().isoformat()
+    return RedirectResponse(f"/planner?day={q_day}", status_code=303)
 
 
 @app.get("/planner/conflicts")
@@ -840,9 +936,14 @@ def update_visit_common(visit_id: int, payload: dict, db: Session):
         visit.assigned_employee_number = employee.full_name if employee else None
         visit.client_id = int(payload["client_id"]) if payload.get("client_id") else visit.client_id
         visit.car_id = int(payload["car_id"]) if payload.get("car_id") else visit.car_id
+        visit.request_id = int(payload["request_id"]) if payload.get("request_id") else visit.request_id
         visit.problem_description = none_if_empty(payload.get("problem_description")) or visit.problem_description
         visit.work_type = none_if_empty(payload.get("work_type")) or visit.work_type
         visit.service_comment = none_if_empty(payload.get("service_comment"))
+        if payload.get("work_cost") is not None and str(payload.get("work_cost")).strip() != "":
+            visit.work_cost = float(payload.get("work_cost"))
+        if payload.get("master_profit") is not None and str(payload.get("master_profit")).strip() != "":
+            visit.master_profit = float(payload.get("master_profit"))
         visit.visit_status = none_if_empty(payload.get("visit_status")) or visit.visit_status
         _sync_service_slot(db, visit)
         _log_service_visit_history_if_changed(db, visit, old_status, old_start, old_end, old_employee, old_bay)

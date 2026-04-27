@@ -148,11 +148,15 @@
     form.client.value = card.dataset.client || '';
     form.car.value = card.dataset.car || '';
     form.problem_description.value = card.dataset.problem || '';
+    form.request_id.value = card.dataset.requestId || '';
     form.visit_status.value = card.dataset.status || 'Записан';
     form.day.value = day;
     form.start_time.value = minToTime(topMin);
     form.end_time.value = minToTime(endMin);
     form.work_type.value = card.dataset.workType || '';
+    form.service_comment.value = card.dataset.serviceComment || '';
+    form.work_cost.value = card.dataset.workCost || '';
+    form.master_profit.value = card.dataset.masterProfit || '';
     form.service_bay_id.value = card.closest('.bay-col').dataset.bayId;
     form.employee_id.value = card.dataset.employeeId || '';
   }
@@ -166,10 +170,13 @@
       end_time: form.end_time.value,
       service_bay_id: form.service_bay_id.value,
       employee_id: form.employee_id.value || null,
+      request_id: form.request_id.value || null,
       problem_description: form.problem_description.value,
       visit_status: form.visit_status.value,
       work_type: form.work_type.value,
       service_comment: form.service_comment.value,
+      work_cost: form.work_cost.value || null,
+      master_profit: form.master_profit.value || null,
     };
     try {
       const res = await fetch(`/api/visits/${visitId}`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
@@ -198,6 +205,23 @@
     });
   });
   document.getElementById('create-modal-close')?.addEventListener('click', ()=> document.getElementById('create-slot-modal')?.classList.add('hidden'));
+
+  document.querySelectorAll('.free-slot-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const bay = btn.dataset.bayId;
+      const start = btn.dataset.start;
+      const startMin = parseTimeToMin(start);
+      const end = minToTime((startMin - parseTimeToMin(startTime)) + stepMin);
+      const createModal = document.getElementById('create-slot-modal');
+      const createForm = document.getElementById('create-slot-form');
+      if(createModal && createForm){
+        createModal.classList.remove('hidden');
+        createForm.querySelector('[name="start_time"]').value = start;
+        createForm.querySelector('[name="end_time"]').value = end;
+        createForm.querySelector('[name="service_bay_id"]').value = bay;
+      }
+    });
+  });
 
   document.querySelectorAll('.quick-work').forEach(btn=>{
     btn.addEventListener('click', ()=>{
