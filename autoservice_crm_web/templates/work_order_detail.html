@@ -12,7 +12,7 @@
 <form method="post" action="/work-orders/{{ wo.work_order_id }}/items" class="form-grid">
   <input name="work_type" placeholder="Тип работ" required>
   <input name="description" placeholder="Описание">
-  <input type="number" step="0.01" name="qty" value="1" required>
+  <input type="number" step="0.01" name="qty" placeholder="Количество" required>
   <input type="number" step="0.01" name="unit_price" placeholder="Цена" required>
   <input type="number" step="0.01" name="unit_cost" placeholder="Себестоимость" required>
   <button class="btn">Добавить работу</button>
@@ -21,7 +21,7 @@
 <h3>Запчасти</h3>
 <form method="post" action="/work-orders/{{ wo.work_order_id }}/parts" class="form-grid">
   <input name="part_name" placeholder="Запчасть" required>
-  <input type="number" step="0.01" name="qty" value="1" required>
+  <input type="number" step="0.01" name="qty" placeholder="Количество" required>
   <input type="number" step="0.01" name="sale_price" placeholder="Цена продажи" required>
   <input type="number" step="0.01" name="cost_price" placeholder="Себестоимость" required>
   <button class="btn">Добавить запчасть</button>

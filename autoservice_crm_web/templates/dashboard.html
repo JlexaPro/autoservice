@@ -14,7 +14,7 @@
   <div class="card">Конверсия заявок<br><b>{{ '%.1f'|format(cards.conversion_today) }}%</b></div>
   <div class="card">Загрузка сервиса<br><b>{{ '%.1f'|format(cards.load_pct_today) }}%</b></div>
 </div>
-<p><a class="btn" href="/requests/new">Добавить заявку</a> <a class="btn" href="/planner">Открыть планер</a> <a class="btn" href="/clients">Добавить клиента</a> <a class="btn" href="/followups">Создать напоминание</a></p>
+<p><a class="btn" href="/requests/new">Добавить заявку</a> <a class="btn" href="/planner">Открыть планер</a> <a class="btn" href="/clients/new">Добавить клиента</a> <a class="btn" href="/followups/new">Создать напоминание</a></p>
 <h2>Просроченные напоминания</h2>
 <table><tr><th>Дата</th><th>Клиент</th><th>Задача</th></tr>{% for f,c in overdue_items %}<tr><td>{{ f.due_date }}</td><td><a href="/clients/{{ c.client_id }}">{{ c.full_name }}</a></td><td>{{ f.title }}</td></tr>{% endfor %}</table>
 <h2>Записи на сегодня</h2>

@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Новое напоминание</h1>
+<form method="post" class="form-grid">
+  <label>Клиент* <select name="client_id" required>{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }} ({{ c.phone_raw }})</option>{% endfor %}</select></label>
+  <label>Авто <select name="car_id"><option value="">Не выбрано</option>{% for car in cars %}<option value="{{ car.car_id }}">{{ car.brand }} {{ car.model }} {{ car.plate_number }}</option>{% endfor %}</select></label>
+  <label>Тип задачи* <select name="task_type"><option>first_contact</option><option>callback</option><option>service_reminder</option><option>seasonal_offer</option><option>repair_followup</option></select></label>
+  <label>Дата* <input type="date" name="due_date" value="{{ today }}" required></label>
+  <label>Заголовок* <input name="title" required></label>
+  <label>Описание <textarea name="description"></textarea></label>
+  <label>Удобное время связи <input name="preferred_contact_slot"></label>
+  <button class="btn">Сохранить</button>
+</form>
+{% endblock %}

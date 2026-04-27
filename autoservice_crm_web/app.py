@@ -261,6 +261,40 @@ def clients_page(request: Request, q: str = "", db: Session = Depends(get_db)):
     return templates.TemplateResponse("clients.html", {"request": request, "clients": clients})
 
 
+@app.get("/clients/new")
+def client_new_form(request: Request):
+    return templates.TemplateResponse("client_new.html", {"request": request})
+
+
+@app.post("/clients/new")
+def client_new(
+    full_name: str = Form(...),
+    phone_raw: str = Form(...),
+    email: str = Form(default=""),
+    client_tone: str = Form(default="Нейтральный"),
+    client_tags: str = Form(default=""),
+    manager_comment: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    phone_n = normalize_phone(phone_raw)
+    with db.begin():
+        exists = db.execute(select(Client).where(Client.phone_normalized == phone_n, func.lower(func.trim(Client.full_name)) == full_name.strip().lower())).scalar_one_or_none()
+        if exists:
+            return RedirectResponse(f"/clients/{exists.client_id}", status_code=303)
+        client = Client(
+            full_name=full_name.strip(),
+            phone_raw=phone_raw.strip(),
+            phone_normalized=phone_n,
+            email=none_if_empty(email.strip()),
+            client_tone=client_tone,
+            client_tags=none_if_empty(client_tags.strip()),
+            manager_comment=none_if_empty(manager_comment.strip()),
+        )
+        db.add(client)
+        db.flush()
+    return RedirectResponse(f"/clients/{client.client_id}", status_code=303)
+
+
 @app.get("/clients/{client_id}")
 def client_detail(request: Request, client_id: int, db: Session = Depends(get_db)):
     client = db.get(Client, client_id)
@@ -629,6 +663,38 @@ def followups_page(request: Request, only_open: bool = True, only_overdue: bool 
     return templates.TemplateResponse("followups.html", {"request": request, "rows": rows, "today": date.today()})
 
 
+@app.get("/followups/new")
+def followup_new_form(request: Request, db: Session = Depends(get_db)):
+    clients = db.execute(select(Client).where(Client.is_active.is_(True)).order_by(Client.full_name).limit(300)).scalars().all()
+    cars = db.execute(select(Car).where(Car.is_active.is_(True)).order_by(Car.car_id.desc()).limit(500)).scalars().all()
+    return templates.TemplateResponse("followup_new.html", {"request": request, "clients": clients, "cars": cars, "today": date.today()})
+
+
+@app.post("/followups/new")
+def followup_new(
+    client_id: int = Form(...),
+    car_id: str = Form(default=""),
+    task_type: str = Form(...),
+    due_date: date = Form(...),
+    title: str = Form(...),
+    description: str = Form(default=""),
+    preferred_contact_slot: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    with db.begin():
+        f = Followup(
+            client_id=client_id,
+            car_id=int(car_id) if none_if_empty(car_id) else None,
+            task_type=task_type.strip(),
+            due_date=due_date,
+            title=title.strip(),
+            description=none_if_empty(description.strip()),
+            preferred_contact_slot=none_if_empty(preferred_contact_slot.strip()),
+            task_status="Открыто",
+        )
+        db.add(f)
+    return RedirectResponse("/followups", status_code=303)
+
 @app.post("/followups/{followup_id}/done")
 def followup_done(followup_id: int, db: Session = Depends(get_db)):
     f = db.get(Followup, followup_id)
@@ -925,7 +991,7 @@ def update_work_order_status(work_order_id: int, status: str = Form(...), db: Se
         raise HTTPException(404, "Заказ-наряд не найден")
     if wo.status == status:
         return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
-    with db.begin():
+    try:
         old = wo.status
         wo.status = status
         if status == "Закрыт":
@@ -933,6 +999,10 @@ def update_work_order_status(work_order_id: int, status: str = Form(...), db: Se
             for days, title in [(7, "Проверить результат ремонта"), (30, "Плановый follow-up после ремонта")]:
                 db.add(Followup(client_id=wo.client_id, car_id=wo.car_id, task_type="repair_followup", title=title, description=f"Авто-follow-up по заказ-наряду {wo.order_number}", due_date=(date.today() + timedelta(days=days))))
         db.add(WorkOrderStatusHistory(work_order_id=work_order_id, old_status=old, new_status=status, changed_by="manager"))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
 
 
