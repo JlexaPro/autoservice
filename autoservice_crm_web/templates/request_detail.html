@@ -12,6 +12,11 @@
   <button class="btn" name="action" value="refused">Отказ</button>
   <button class="btn" name="action" value="closed">Закрыть</button>
 </form>
+<p>
+  <a class="btn" href="/planner?view_mode=day&from_request_id={{ req.request_id }}{% if req.desired_visit_date %}&day={{ req.desired_visit_date }}{% endif %}">
+    Запланировать в планере
+  </a>
+</p>
 <h3>История статусов</h3>
 <ul>{% for h in history %}<li>{{ h.changed_at }}: {{ h.old_status }} → {{ h.new_status }} {{ h.comment or '' }}</li>{% endfor %}</ul>
 <h3>Напоминания</h3>

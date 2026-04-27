@@ -1,3 +1,4 @@
+import calendar
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
 import logging
@@ -627,8 +628,17 @@ def _log_service_visit_history_if_changed(
 
 
 @app.get("/planner")
-def planner(request: Request, day: date | None = None, error: str = "", grid_step: int | None = None, db: Session = Depends(get_db)):
+def planner(
+    request: Request,
+    day: date | None = None,
+    error: str = "",
+    grid_step: int | None = None,
+    view_mode: str = "day",
+    from_request_id: int | None = None,
+    db: Session = Depends(get_db),
+):
     d = day or date.today()
+    prefill_warning = ""
     start_t, end_t, step_min, time_points = get_working_grid(db)
     if grid_step in (30, 60):
         step_min = grid_step
@@ -730,8 +740,100 @@ def planner(request: Request, day: date | None = None, error: str = "", grid_ste
                 we = (datetime.combine(d, start_t) + timedelta(minutes=w_end)).strftime("%H:%M")
                 formatted.append(f"{ws}–{we}")
         free_windows[bay.service_bay_id] = formatted
+    prefill = {
+        "day": d.isoformat(),
+        "start_time": "09:00",
+        "end_time": "10:00",
+        "service_bay_id": bays[0].service_bay_id if bays else None,
+        "client_id": clients[0].client_id if clients else None,
+        "car_value": "",
+        "request_id": "",
+    }
+    if from_request_id:
+        req = db.get(ServiceRequest, from_request_id)
+        if req:
+            if req.desired_visit_date:
+                d = req.desired_visit_date
+                prefill["day"] = req.desired_visit_date.isoformat()
+            prefill["client_id"] = req.client_id
+            prefill["request_id"] = str(req.request_id)
+            if req.car_id:
+                car = db.get(Car, req.car_id)
+                if car:
+                    prefill["car_value"] = f"{car.car_id}|{car.brand} {car.model} {car.plate_number}"
+            slot = (req.preferred_contact_slot or "").strip()
+            parsed_start = None
+            if slot:
+                parsed_start = slot.split("–")[0].split("-")[0].strip()
+                try:
+                    datetime.strptime(parsed_start, "%H:%M")
+                except Exception:
+                    parsed_start = None
+            if parsed_start:
+                prefill["start_time"] = parsed_start
+                start_min = int(parsed_start.split(":")[0]) * 60 + int(parsed_start.split(":")[1])
+                end_min = start_min + max(30, step_min)
+                prefill["end_time"] = f"{end_min // 60:02d}:{end_min % 60:02d}"
+            if req.desired_visit_date:
+                desired_start = datetime.combine(req.desired_visit_date, datetime.strptime(prefill["start_time"], "%H:%M").time())
+                desired_end = datetime.combine(req.desired_visit_date, datetime.strptime(prefill["end_time"], "%H:%M").time())
+                busy_bays = db.execute(
+                    select(ServiceVisit.service_bay_id)
+                    .where(
+                        ServiceVisit.planned_start_at < desired_end,
+                        ServiceVisit.planned_end_at > desired_start,
+                        ServiceVisit.visit_status != "Отменён",
+                        ServiceVisit.service_bay_id.is_not(None),
+                    )
+                    .distinct()
+                ).all()
+                if bays and len(busy_bays) >= len(bays):
+                    prefill_warning = "Желаемое время из заявки занято на всех постах. Перешли в планер, выберите другой слот."
+
+    week_start = d - timedelta(days=d.weekday())
+    week_days = [week_start + timedelta(days=i) for i in range(7)]
+    week_rows = db.execute(
+        select(ServiceVisit, Client, Car, ServiceBay)
+        .join(Client, Client.client_id == ServiceVisit.client_id)
+        .join(Car, Car.car_id == ServiceVisit.car_id)
+        .join(ServiceBay, ServiceBay.service_bay_id == ServiceVisit.service_bay_id, isouter=True)
+        .where(
+            cast(ServiceVisit.planned_start_at, Date) >= week_start,
+            cast(ServiceVisit.planned_start_at, Date) <= week_start + timedelta(days=6),
+            ServiceVisit.service_bay_id.is_not(None),
+        )
+        .order_by(ServiceVisit.planned_start_at.asc())
+    ).all()
+    week_by_day: dict[str, list[dict]] = {wd.isoformat(): [] for wd in week_days}
+    for visit, client, car, bay in week_rows:
+        key = (visit.planned_start_at.date() if visit.planned_start_at else d).isoformat()
+        week_by_day.setdefault(key, []).append({
+            "visit_id": visit.visit_id,
+            "start": visit.planned_start_at.strftime("%H:%M") if visit.planned_start_at else "",
+            "end": visit.planned_end_at.strftime("%H:%M") if visit.planned_end_at else "",
+            "client": client.full_name,
+            "car": f"{car.brand} {car.model}",
+            "bay_name": bay.bay_name if bay else "Без поста",
+            "status": visit.visit_status,
+        })
+
+    month_first = d.replace(day=1)
+    month_last_day = calendar.monthrange(d.year, d.month)[1]
+    month_last = d.replace(day=month_last_day)
+    month_rows = db.execute(
+        select(cast(ServiceVisit.planned_start_at, Date), func.count())
+        .where(
+            cast(ServiceVisit.planned_start_at, Date) >= month_first,
+            cast(ServiceVisit.planned_start_at, Date) <= month_last,
+        )
+        .group_by(cast(ServiceVisit.planned_start_at, Date))
+    ).all()
+    month_counts = {k.isoformat(): int(v) for k, v in month_rows if k}
+    month_matrix = calendar.Calendar(firstweekday=0).monthdatescalendar(d.year, d.month)
+
     return templates.TemplateResponse("planner.html", {
         "request": request,
+        "view_mode": view_mode if view_mode in {"day", "week", "month"} else "day",
         "day": d,
         "bays": bays,
         "times": [tp.strftime("%H:%M") for tp in time_points],
@@ -750,6 +852,14 @@ def planner(request: Request, day: date | None = None, error: str = "", grid_ste
         "next_day": d + timedelta(days=1),
         "tomorrow": date.today() + timedelta(days=1),
         "free_windows": free_windows,
+        "from_request_id": from_request_id,
+        "prefill_warning": prefill_warning,
+        "prefill": prefill,
+        "week_days": week_days,
+        "week_by_day": week_by_day,
+        "month_matrix": month_matrix,
+        "month_counts": month_counts,
+        "month_first": month_first,
     })
 
 
