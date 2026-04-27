@@ -180,4 +180,27 @@
       if(createForm){ createForm.querySelector('[name="start_time"]').value=start; createForm.querySelector('[name="end_time"]').value=end; createForm.querySelector('[name="service_bay_id"]').value=bay; window.scrollTo({top:createForm.offsetTop-20, behavior:'smooth'}); }
     });
   });
+
+  document.querySelectorAll('.quick-work').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const form = document.querySelector('form[action="/service_visits"]');
+      if(form) form.querySelector('[name="work_type"]').value = btn.dataset.work;
+    });
+  });
+
+  document.getElementById('auto-assign')?.addEventListener('click', async ()=>{
+    const form = document.querySelector('form[action="/service_visits"]');
+    if(!form) return;
+    const params = new URLSearchParams({
+      day: form.querySelector('[name="day"]').value,
+      start_time: form.querySelector('[name="start_time"]').value,
+      end_time: form.querySelector('[name="end_time"]').value,
+    });
+    const res = await fetch(`/api/planner/auto-assign?${params.toString()}`);
+    const data = await res.json();
+    if(data.ok){
+      if(data.bay_id) form.querySelector('[name="service_bay_id"]').value = String(data.bay_id);
+      if(data.employee_id) form.querySelector('[name="employee_id"]').value = String(data.employee_id);
+    }
+  });
 })();

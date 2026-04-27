@@ -11,10 +11,19 @@
   <div class="card">Выручка: <b>{{ '%.2f'|format(total_revenue) }} ₽</b></div>
   <div class="card">Прибыль мастеров: <b>{{ '%.2f'|format(total_master_profit) }} ₽</b></div>
   <div class="card">Прибыль сервиса: <b>{{ '%.2f'|format(service_profit) }} ₽</b></div>
+  <div class="card">Средний чек: <b>{{ '%.2f'|format(avg_check) }} ₽</b></div>
 </div>
 <h3>По мастерам</h3>
 <table><tr><th>Мастер</th><th>Визитов</th><th>Выручка</th><th>Прибыль мастера</th></tr>
 {% for name, row in by_master %}<tr><td>{{ name }}</td><td>{{ row.count }}</td><td>{{ '%.2f'|format(row.revenue) }}</td><td>{{ '%.2f'|format(row.profit) }}</td></tr>{% endfor %}
+</table>
+<h3>ТОП прибыльных клиентов</h3>
+<table><tr><th>Клиент</th><th>Прибыль</th></tr>
+{% for name, profit in by_client %}<tr><td>{{ name }}</td><td>{{ '%.2f'|format(profit) }}</td></tr>{% endfor %}
+</table>
+<h3>Выручка по типам работ</h3>
+<table><tr><th>Тип работ</th><th>Выручка</th></tr>
+{% for wt, amount in by_work_type %}<tr><td>{{ wt }}</td><td>{{ '%.2f'|format(amount) }}</td></tr>{% endfor %}
 </table>
 <h3>Детализация визитов</h3>
 <table><tr><th>Дата</th><th>Клиент</th><th>Авто</th><th>Мастер</th><th>Вид работы</th><th>Стоимость</th><th>Прибыль мастера</th><th>Прибыль сервиса</th></tr>

@@ -275,3 +275,67 @@ class PromotionContact(Base):
     contacted_at = Column(DateTime(timezone=True))
     result_comment = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class WorkOrder(Base):
+    __tablename__ = "work_orders"
+    __table_args__ = {"schema": "app"}
+    work_order_id = Column(BigInteger, primary_key=True)
+    order_number = Column(Text, nullable=False, unique=True)
+    request_id = Column(BigInteger, ForeignKey("app.service_requests.request_id"))
+    visit_id = Column(BigInteger, ForeignKey("app.service_visits.visit_id"))
+    client_id = Column(BigInteger, ForeignKey("app.clients.client_id"), nullable=False)
+    car_id = Column(BigInteger, ForeignKey("app.cars.car_id"), nullable=False)
+    assigned_employee_id = Column(BigInteger, ForeignKey("app.employees.employee_id"))
+    service_bay_id = Column(BigInteger, ForeignKey("app.service_bays.service_bay_id"))
+    status = Column(Text, nullable=False, default="Создан")
+    opened_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    closed_at = Column(DateTime(timezone=True))
+    work_total = Column(Numeric(12, 2), nullable=False, default=0)
+    parts_total = Column(Numeric(12, 2), nullable=False, default=0)
+    parts_cost_total = Column(Numeric(12, 2), nullable=False, default=0)
+    total_amount = Column(Numeric(12, 2), nullable=False, default=0)
+    total_cost = Column(Numeric(12, 2), nullable=False, default=0)
+    total_profit = Column(Numeric(12, 2), nullable=False, default=0)
+    comment = Column(Text)
+
+
+class WorkOrderItem(Base):
+    __tablename__ = "work_order_items"
+    __table_args__ = {"schema": "app"}
+    item_id = Column(BigInteger, primary_key=True)
+    work_order_id = Column(BigInteger, ForeignKey("app.work_orders.work_order_id", ondelete="CASCADE"), nullable=False)
+    work_type = Column(Text, nullable=False)
+    description = Column(Text)
+    qty = Column(Numeric(10, 2), nullable=False, default=1)
+    unit_price = Column(Numeric(12, 2), nullable=False, default=0)
+    unit_cost = Column(Numeric(12, 2), nullable=False, default=0)
+    line_total = Column(Numeric(12, 2), nullable=False, default=0)
+    line_cost = Column(Numeric(12, 2), nullable=False, default=0)
+    line_profit = Column(Numeric(12, 2), nullable=False, default=0)
+
+
+class WorkOrderPart(Base):
+    __tablename__ = "work_order_parts"
+    __table_args__ = {"schema": "app"}
+    part_id = Column(BigInteger, primary_key=True)
+    work_order_id = Column(BigInteger, ForeignKey("app.work_orders.work_order_id", ondelete="CASCADE"), nullable=False)
+    part_name = Column(Text, nullable=False)
+    qty = Column(Numeric(10, 2), nullable=False, default=1)
+    sale_price = Column(Numeric(12, 2), nullable=False, default=0)
+    cost_price = Column(Numeric(12, 2), nullable=False, default=0)
+    line_total = Column(Numeric(12, 2), nullable=False, default=0)
+    line_cost = Column(Numeric(12, 2), nullable=False, default=0)
+    line_profit = Column(Numeric(12, 2), nullable=False, default=0)
+
+
+class WorkOrderStatusHistory(Base):
+    __tablename__ = "work_order_status_history"
+    __table_args__ = {"schema": "app"}
+    history_id = Column(BigInteger, primary_key=True)
+    work_order_id = Column(BigInteger, ForeignKey("app.work_orders.work_order_id", ondelete="CASCADE"), nullable=False)
+    old_status = Column(Text)
+    new_status = Column(Text, nullable=False)
+    changed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    changed_by = Column(Text)
+    comment = Column(Text)

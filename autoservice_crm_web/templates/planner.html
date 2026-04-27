@@ -6,6 +6,9 @@
   <input type="date" name="day" value="{{ day }}">
   <button class="btn">Открыть дату</button>
 </form>
+<div class="cards">
+  {% for b in bays %}<div class="card">{{ b.bay_name }}: загрузка <b>{{ bay_load[b.service_bay_id] }}%</b></div>{% endfor %}
+</div>
 
 <div id="planner-board" class="planner-board" data-day="{{ day }}" data-start-time="{{ start_time }}" data-step-min="{{ step_min }}" data-day-minutes="{{ day_minutes }}">
   <div class="time-col">
@@ -75,6 +78,13 @@
 
 <h3>Создать визит</h3>
 <form method="post" action="/service_visits" class="form-grid">
+  <div>
+    Быстрые сценарии:
+    <button class="btn quick-work" type="button" data-work="ТО">ТО</button>
+    <button class="btn quick-work" type="button" data-work="Тормоза">Тормоза</button>
+    <button class="btn quick-work" type="button" data-work="Подвеска">Подвеска</button>
+    <button class="btn" id="auto-assign" type="button">Автоназначение</button>
+  </div>
   <input type="date" name="day" value="{{ day }}" required>
   <input type="time" name="start_time" value="09:00" required>
   <input type="time" name="end_time" value="10:00" required>

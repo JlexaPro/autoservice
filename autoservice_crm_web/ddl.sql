@@ -263,3 +263,62 @@ CREATE TABLE IF NOT EXISTS app.promotion_contacts (
     result_comment text NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS app.work_orders (
+    work_order_id bigserial PRIMARY KEY,
+    order_number text NOT NULL UNIQUE,
+    request_id bigint NULL REFERENCES app.service_requests(request_id),
+    visit_id bigint NULL REFERENCES app.service_visits(visit_id),
+    client_id bigint NOT NULL REFERENCES app.clients(client_id),
+    car_id bigint NOT NULL REFERENCES app.cars(car_id),
+    assigned_employee_id bigint NULL REFERENCES app.employees(employee_id),
+    service_bay_id bigint NULL REFERENCES app.service_bays(service_bay_id),
+    status text NOT NULL DEFAULT 'Создан',
+    opened_at timestamptz NOT NULL DEFAULT now(),
+    closed_at timestamptz NULL,
+    work_total numeric(12,2) NOT NULL DEFAULT 0,
+    parts_total numeric(12,2) NOT NULL DEFAULT 0,
+    parts_cost_total numeric(12,2) NOT NULL DEFAULT 0,
+    total_amount numeric(12,2) NOT NULL DEFAULT 0,
+    total_cost numeric(12,2) NOT NULL DEFAULT 0,
+    total_profit numeric(12,2) NOT NULL DEFAULT 0,
+    comment text NULL
+);
+CREATE INDEX IF NOT EXISTS idx_work_orders_opened_at ON app.work_orders(opened_at);
+CREATE INDEX IF NOT EXISTS idx_work_orders_status ON app.work_orders(status);
+CREATE INDEX IF NOT EXISTS idx_work_orders_client_id ON app.work_orders(client_id);
+
+CREATE TABLE IF NOT EXISTS app.work_order_items (
+    item_id bigserial PRIMARY KEY,
+    work_order_id bigint NOT NULL REFERENCES app.work_orders(work_order_id) ON DELETE CASCADE,
+    work_type text NOT NULL,
+    description text NULL,
+    qty numeric(10,2) NOT NULL DEFAULT 1,
+    unit_price numeric(12,2) NOT NULL DEFAULT 0,
+    unit_cost numeric(12,2) NOT NULL DEFAULT 0,
+    line_total numeric(12,2) NOT NULL DEFAULT 0,
+    line_cost numeric(12,2) NOT NULL DEFAULT 0,
+    line_profit numeric(12,2) NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS app.work_order_parts (
+    part_id bigserial PRIMARY KEY,
+    work_order_id bigint NOT NULL REFERENCES app.work_orders(work_order_id) ON DELETE CASCADE,
+    part_name text NOT NULL,
+    qty numeric(10,2) NOT NULL DEFAULT 1,
+    sale_price numeric(12,2) NOT NULL DEFAULT 0,
+    cost_price numeric(12,2) NOT NULL DEFAULT 0,
+    line_total numeric(12,2) NOT NULL DEFAULT 0,
+    line_cost numeric(12,2) NOT NULL DEFAULT 0,
+    line_profit numeric(12,2) NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS app.work_order_status_history (
+    history_id bigserial PRIMARY KEY,
+    work_order_id bigint NOT NULL REFERENCES app.work_orders(work_order_id) ON DELETE CASCADE,
+    old_status text NULL,
+    new_status text NOT NULL,
+    changed_at timestamptz NOT NULL DEFAULT now(),
+    changed_by text NULL,
+    comment text NULL
+);

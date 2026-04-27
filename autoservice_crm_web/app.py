@@ -25,6 +25,10 @@ from models import (
     ServiceRequest,
     ServiceSlot,
     ServiceVisit,
+    WorkOrder,
+    WorkOrderItem,
+    WorkOrderPart,
+    WorkOrderStatusHistory,
 )
 from schemas import IncomingRequestSchema
 from services import (
@@ -95,6 +99,14 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     in_work_now = db.scalar(select(func.count()).select_from(ServiceVisit).where(ServiceVisit.visit_status == "В работе"))
     done_today = db.scalar(select(func.count()).select_from(ServiceVisit).where(ServiceVisit.visit_status == "Завершён", cast(ServiceVisit.completed_at, Date) == today))
     refusals_7 = db.scalar(select(func.count()).select_from(ServiceRequest).where(ServiceRequest.request_status == "Отказ", cast(ServiceRequest.source_created_at, Date) >= week_ago))
+    todays_orders = db.execute(select(WorkOrder).where(cast(WorkOrder.opened_at, Date) == today)).scalars().all()
+    revenue_today = sum(float(o.total_amount or 0) for o in todays_orders)
+    profit_today = sum(float(o.total_profit or 0) for o in todays_orders)
+    avg_check_today = revenue_today / len(todays_orders) if todays_orders else 0
+    requests_today_count = db.scalar(select(func.count()).select_from(ServiceRequest).where(cast(ServiceRequest.source_created_at, Date) == today)) or 0
+    conversion_today = (booked_today / requests_today_count * 100) if requests_today_count else 0
+    bays_cnt = db.scalar(select(func.count()).select_from(ServiceBay).where(ServiceBay.is_active.is_(True))) or 1
+    load_pct_today = min(100.0, (booked_today / max(1, bays_cnt * 10)) * 100)
 
     overdue_items = db.execute(
         select(Followup, Client).join(Client, Client.client_id == Followup.client_id).where(Followup.task_status == "Открыто", Followup.due_date < today).order_by(Followup.due_date.asc()).limit(10)
@@ -110,6 +122,11 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "in_work_now": in_work_now or 0,
         "done_today": done_today or 0,
         "refusals_7": refusals_7 or 0,
+        "revenue_today": revenue_today,
+        "profit_today": profit_today,
+        "avg_check_today": avg_check_today,
+        "conversion_today": conversion_today,
+        "load_pct_today": load_pct_today,
     }, "overdue_items": overdue_items, "visits_today": visits_today})
 
 
@@ -376,7 +393,16 @@ def planner(request: Request, day: date | None = None, error: str = "", db: Sess
     employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
     clients = db.execute(select(Client).where(Client.is_active.is_(True)).limit(200)).scalars().all()
     cars = db.execute(select(Car).where(Car.is_active.is_(True)).limit(500)).scalars().all()
-    return templates.TemplateResponse("planner.html", {"request": request, "day": d, "bays": bays, "times": [tp.strftime("%H:%M") for tp in time_points], "step_min": step_min, "visit_blocks": visit_blocks, "employees": employees, "clients": clients, "cars": cars, "start_time": start_t.strftime("%H:%M"), "day_minutes": int((day_end - day_start).total_seconds() // 60), "error": error})
+    total_minutes = int((day_end - day_start).total_seconds() // 60)
+    bay_load = {}
+    for bay in bays:
+        used = sum(v["height"] for v in visit_blocks if v["bay_id"] == bay.service_bay_id)
+        bay_load[bay.service_bay_id] = round((used / total_minutes) * 100, 1) if total_minutes else 0
+    employee_load = {}
+    for emp in employees:
+        used = sum(v["height"] for v in visit_blocks if v.get("employee_id") == emp.employee_id)
+        employee_load[emp.employee_id] = round((used / total_minutes) * 100, 1) if total_minutes else 0
+    return templates.TemplateResponse("planner.html", {"request": request, "day": d, "bays": bays, "times": [tp.strftime("%H:%M") for tp in time_points], "step_min": step_min, "visit_blocks": visit_blocks, "employees": employees, "clients": clients, "cars": cars, "start_time": start_t.strftime("%H:%M"), "day_minutes": total_minutes, "error": error, "bay_load": bay_load, "employee_load": employee_load})
 
 
 @app.get("/planner/conflicts")
@@ -397,6 +423,27 @@ def planner_conflicts(day: date | None = None, db: Session = Depends(get_db)):
             if a.planned_start_at < b.planned_end_at and a.planned_end_at > b.planned_start_at:
                 conflicts.append({"visit_a": a.visit_id, "visit_b": b.visit_id, "bay_id": a.service_bay_id})
     return {"ok": True, "day": d.isoformat(), "conflicts": conflicts}
+
+
+@app.get("/api/planner/auto-assign")
+def planner_auto_assign(day: date, start_time: str, end_time: str, db: Session = Depends(get_db)):
+    st = datetime.strptime(start_time, "%H:%M").time()
+    et = datetime.strptime(end_time, "%H:%M").time()
+    start_dt = datetime.combine(day, st)
+    end_dt = datetime.combine(day, et)
+    bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True))).scalars().all()
+    employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
+    bay_scores = []
+    for bay in bays:
+        overlaps = db.scalar(select(func.count()).select_from(ServiceVisit).where(ServiceVisit.service_bay_id == bay.service_bay_id, ServiceVisit.planned_start_at < end_dt, ServiceVisit.planned_end_at > start_dt)) or 0
+        bay_scores.append((overlaps, bay))
+    emp_scores = []
+    for emp in employees:
+        overlaps = db.scalar(select(func.count()).select_from(ServiceVisit).where(ServiceVisit.assigned_employee_id == emp.employee_id, ServiceVisit.planned_start_at < end_dt, ServiceVisit.planned_end_at > start_dt)) or 0
+        emp_scores.append((overlaps, emp))
+    bay_scores.sort(key=lambda x: x[0])
+    emp_scores.sort(key=lambda x: x[0])
+    return {"ok": True, "bay_id": bay_scores[0][1].service_bay_id if bay_scores else None, "employee_id": emp_scores[0][1].employee_id if emp_scores else None}
 
 
 @app.post("/service_visits")
@@ -614,13 +661,19 @@ def finance_page(request: Request, start_date: date | None = None, end_date: dat
     total_revenue = sum(float(v.work_cost or 0) for v, _, _, _ in visits)
     total_master_profit = sum(float(v.master_profit or 0) for v, _, _, _ in visits)
     service_profit = total_revenue - total_master_profit
+    avg_check = total_revenue / len(visits) if visits else 0
     by_master: dict[str, dict] = {}
+    by_client: dict[str, float] = {}
+    by_work_type: dict[str, float] = {}
     for visit, employee, _, _ in visits:
         name = employee.full_name if employee else "Без мастера"
         by_master.setdefault(name, {"revenue": 0.0, "profit": 0.0, "count": 0})
         by_master[name]["revenue"] += float(visit.work_cost or 0)
         by_master[name]["profit"] += float(visit.master_profit or 0)
         by_master[name]["count"] += 1
+    for visit, _, client, _ in visits:
+        by_client[client.full_name] = by_client.get(client.full_name, 0.0) + float((visit.work_cost or 0) - (visit.master_profit or 0))
+        by_work_type[visit.work_type or "Не указано"] = by_work_type.get(visit.work_type or "Не указано", 0.0) + float(visit.work_cost or 0)
     return templates.TemplateResponse("finance.html", {
         "request": request,
         "start_date": start_date,
@@ -629,8 +682,130 @@ def finance_page(request: Request, start_date: date | None = None, end_date: dat
         "total_revenue": total_revenue,
         "total_master_profit": total_master_profit,
         "service_profit": service_profit,
+        "avg_check": avg_check,
         "by_master": sorted(by_master.items(), key=lambda x: x[0]),
+        "by_client": sorted(by_client.items(), key=lambda x: x[1], reverse=True)[:10],
+        "by_work_type": sorted(by_work_type.items(), key=lambda x: x[1], reverse=True),
     })
+
+
+def recalc_work_order_totals(db: Session, work_order: WorkOrder):
+    work_items = db.execute(select(WorkOrderItem).where(WorkOrderItem.work_order_id == work_order.work_order_id)).scalars().all()
+    part_items = db.execute(select(WorkOrderPart).where(WorkOrderPart.work_order_id == work_order.work_order_id)).scalars().all()
+    work_total = sum(float(i.line_total or 0) for i in work_items)
+    work_cost = sum(float(i.line_cost or 0) for i in work_items)
+    parts_total = sum(float(i.line_total or 0) for i in part_items)
+    parts_cost = sum(float(i.line_cost or 0) for i in part_items)
+    work_order.work_total = work_total
+    work_order.parts_total = parts_total
+    work_order.parts_cost_total = parts_cost
+    work_order.total_amount = work_total + parts_total
+    work_order.total_cost = work_cost + parts_cost
+    work_order.total_profit = work_order.total_amount - work_order.total_cost
+
+
+@app.get("/work-orders")
+def work_orders_page(request: Request, db: Session = Depends(get_db)):
+    rows = db.execute(
+        select(WorkOrder, Client, Car)
+        .join(Client, Client.client_id == WorkOrder.client_id)
+        .join(Car, Car.car_id == WorkOrder.car_id)
+        .order_by(WorkOrder.opened_at.desc())
+    ).all()
+    return templates.TemplateResponse("work_orders.html", {"request": request, "rows": rows})
+
+
+@app.get("/work-orders/new")
+def work_order_new_form(request: Request, db: Session = Depends(get_db)):
+    clients = db.execute(select(Client).where(Client.is_active.is_(True)).order_by(Client.full_name).limit(300)).scalars().all()
+    cars = db.execute(select(Car).where(Car.is_active.is_(True)).order_by(Car.car_id.desc()).limit(500)).scalars().all()
+    employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
+    bays = db.execute(select(ServiceBay).where(ServiceBay.is_active.is_(True))).scalars().all()
+    return templates.TemplateResponse("work_order_new.html", {"request": request, "clients": clients, "cars": cars, "employees": employees, "bays": bays})
+
+
+@app.post("/work-orders/new")
+def work_order_new(
+    client_id: int = Form(...),
+    car_id: int = Form(...),
+    assigned_employee_id: int | None = Form(default=None),
+    service_bay_id: int | None = Form(default=None),
+    comment: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    with db.begin():
+        order_number = f"WO-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        wo = WorkOrder(
+            order_number=order_number,
+            client_id=client_id,
+            car_id=car_id,
+            assigned_employee_id=none_if_empty(assigned_employee_id),
+            service_bay_id=none_if_empty(service_bay_id),
+            comment=none_if_empty(comment),
+            status="Создан",
+        )
+        db.add(wo)
+        db.flush()
+        db.add(WorkOrderStatusHistory(work_order_id=wo.work_order_id, old_status=None, new_status="Создан", changed_by="manager"))
+    return RedirectResponse(f"/work-orders/{wo.work_order_id}", status_code=303)
+
+
+@app.get("/work-orders/{work_order_id}")
+def work_order_detail(request: Request, work_order_id: int, db: Session = Depends(get_db)):
+    wo = db.get(WorkOrder, work_order_id)
+    if not wo:
+        raise HTTPException(404, "Заказ-наряд не найден")
+    client = db.get(Client, wo.client_id)
+    car = db.get(Car, wo.car_id)
+    items = db.execute(select(WorkOrderItem).where(WorkOrderItem.work_order_id == work_order_id)).scalars().all()
+    parts = db.execute(select(WorkOrderPart).where(WorkOrderPart.work_order_id == work_order_id)).scalars().all()
+    history = db.execute(select(WorkOrderStatusHistory).where(WorkOrderStatusHistory.work_order_id == work_order_id).order_by(WorkOrderStatusHistory.changed_at.desc())).scalars().all()
+    employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
+    return templates.TemplateResponse("work_order_detail.html", {"request": request, "wo": wo, "client": client, "car": car, "items": items, "parts": parts, "history": history, "employees": employees})
+
+
+@app.post("/work-orders/{work_order_id}/items")
+def add_work_order_item(work_order_id: int, work_type: str = Form(...), description: str = Form(default=""), qty: float = Form(1), unit_price: float = Form(0), unit_cost: float = Form(0), db: Session = Depends(get_db)):
+    wo = db.get(WorkOrder, work_order_id)
+    if not wo:
+        raise HTTPException(404, "Заказ-наряд не найден")
+    with db.begin():
+        line_total = qty * unit_price
+        line_cost = qty * unit_cost
+        db.add(WorkOrderItem(work_order_id=work_order_id, work_type=work_type, description=none_if_empty(description), qty=qty, unit_price=unit_price, unit_cost=unit_cost, line_total=line_total, line_cost=line_cost, line_profit=line_total - line_cost))
+        recalc_work_order_totals(db, wo)
+    return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
+
+
+@app.post("/work-orders/{work_order_id}/parts")
+def add_work_order_part(work_order_id: int, part_name: str = Form(...), qty: float = Form(1), sale_price: float = Form(0), cost_price: float = Form(0), db: Session = Depends(get_db)):
+    wo = db.get(WorkOrder, work_order_id)
+    if not wo:
+        raise HTTPException(404, "Заказ-наряд не найден")
+    with db.begin():
+        line_total = qty * sale_price
+        line_cost = qty * cost_price
+        db.add(WorkOrderPart(work_order_id=work_order_id, part_name=part_name, qty=qty, sale_price=sale_price, cost_price=cost_price, line_total=line_total, line_cost=line_cost, line_profit=line_total - line_cost))
+        recalc_work_order_totals(db, wo)
+    return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
+
+
+@app.post("/work-orders/{work_order_id}/status")
+def update_work_order_status(work_order_id: int, status: str = Form(...), db: Session = Depends(get_db)):
+    wo = db.get(WorkOrder, work_order_id)
+    if not wo:
+        raise HTTPException(404, "Заказ-наряд не найден")
+    if wo.status == status:
+        return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
+    with db.begin():
+        old = wo.status
+        wo.status = status
+        if status == "Закрыт":
+            wo.closed_at = datetime.utcnow()
+            for days, title in [(7, "Проверить результат ремонта"), (30, "Плановый follow-up после ремонта")]:
+                db.add(Followup(client_id=wo.client_id, car_id=wo.car_id, task_type="repair_followup", title=title, description=f"Авто-follow-up по заказ-наряду {wo.order_number}", due_date=(date.today() + timedelta(days=days))))
+        db.add(WorkOrderStatusHistory(work_order_id=work_order_id, old_status=old, new_status=status, changed_by="manager"))
+    return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
 
 
 @app.get("/finance/export.xlsx")
