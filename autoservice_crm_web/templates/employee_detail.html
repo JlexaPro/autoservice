@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Карточка сотрудника</h1>
+<form method="post" class="form-grid">
+  <label>ФИО <input name="full_name" value="{{ employee.full_name }}" required></label>
+  <label>Роль <input name="role" value="{{ employee.role }}" required></label>
+  <label>Телефон <input name="phone" value="{{ employee.phone or '' }}"></label>
+  <label>Дата рождения <input type="date" name="birth_date" value="{{ employee.birth_date or '' }}"></label>
+  <label>Часовая ставка <input type="number" step="0.01" name="hourly_rate" value="{{ employee.hourly_rate or '' }}"></label>
+  <label>Специализация <input name="specialization" value="{{ employee.specialization or '' }}"></label>
+  <label>Комментарии <textarea name="comments">{{ employee.comments or '' }}</textarea></label>
+  <button class="btn">Сохранить</button>
+</form>
+{% endblock %}
