@@ -7,10 +7,11 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## 2) Создание БД
+## 2) Создание БД и схемы
 ```bash
 createdb autoservice_crm
 psql -d autoservice_crm -f ddl.sql
+psql -d autoservice_crm -f migration_patch_current.sql
 ```
 
 Если пользователь/пароль/хост отличаются, задайте:
@@ -18,14 +19,41 @@ psql -d autoservice_crm -f ddl.sql
 export DATABASE_URL='postgresql+psycopg2://postgres:postgres@localhost:5432/autoservice_crm'
 ```
 
-## 3) Запуск
+## 3) Проверка схемы
+После применения DDL и patch запустите диагностику соответствия `models.py` и реальной БД:
+```bash
+python check_schema.py
+```
+
+## 4) (Опционально) Alembic
+В проект добавлен базовый Alembic-конфиг:
+- `alembic.ini`
+- `migrations/env.py`
+- baseline-ревизия `0001_baseline_existing_schema`
+
+Для существующей БД (уже созданной через `ddl.sql` + `migration_patch_current.sql`) используйте:
+```bash
+alembic stamp head
+```
+
+Для проверки диффов модели/БД:
+```bash
+alembic revision --autogenerate -m "schema_sync_check"
+```
+
+Применение миграций:
+```bash
+alembic upgrade head
+```
+
+## 5) Запуск
 ```bash
 python app.py
 ```
 
 Открыть: http://127.0.0.1:8000
 
-## 4) Страницы
+## 6) Страницы
 - `/` — dashboard
 - `/requests` — заявки
 - `/requests/new` — ручное добавление заявки
@@ -57,5 +85,5 @@ python app.py
 - `/settings/work-hours` — настройка рабочего времени и шага сетки
 - `POST /api/incoming-request` — будущая интеграция онлайн-форм
 
-## 5) Руководство пользователя
+## 7) Руководство пользователя
 - Файл `USER_GUIDE.txt` — подробное описание всех страниц и функций для презентации владельцу/клиентам.

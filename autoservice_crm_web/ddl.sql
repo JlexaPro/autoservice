@@ -172,7 +172,10 @@ CREATE TABLE IF NOT EXISTS app.service_visits (
 
     assigned_employee_id bigint NULL REFERENCES app.employees(employee_id),
     assigned_employee_number text NULL,
-    service_bay_id bigint NULL REFERENCES app.service_bays(service_bay_id)
+    service_bay_id bigint NULL REFERENCES app.service_bays(service_bay_id),
+    CONSTRAINT chk_service_visits_time_range CHECK (
+        planned_end_at IS NULL OR planned_start_at IS NULL OR planned_end_at > planned_start_at
+    )
 );
 CREATE INDEX IF NOT EXISTS idx_service_visits_client_id ON app.service_visits(client_id);
 CREATE INDEX IF NOT EXISTS idx_service_visits_car_id ON app.service_visits(car_id);
@@ -215,6 +218,8 @@ CREATE TABLE IF NOT EXISTS app.followups (
 );
 CREATE INDEX IF NOT EXISTS idx_followups_due_date ON app.followups(due_date);
 CREATE INDEX IF NOT EXISTS idx_followups_task_status ON app.followups(task_status);
+CREATE INDEX IF NOT EXISTS idx_followups_client_id ON app.followups(client_id);
+CREATE INDEX IF NOT EXISTS idx_followups_request_id ON app.followups(request_id);
 
 CREATE TABLE IF NOT EXISTS app.followup_history (
     history_id bigserial PRIMARY KEY,
@@ -238,10 +243,12 @@ CREATE TABLE IF NOT EXISTS app.service_slots (
     visit_id bigint NULL REFERENCES app.service_visits(visit_id),
     comment text NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT chk_service_slots_time_range CHECK (end_time > start_time)
 );
 CREATE INDEX IF NOT EXISTS idx_service_slots_date_bay ON app.service_slots(slot_date, service_bay_id);
 CREATE INDEX IF NOT EXISTS idx_service_slots_date_employee ON app.service_slots(slot_date, employee_id);
+CREATE INDEX IF NOT EXISTS idx_service_slots_visit_id ON app.service_slots(visit_id);
 
 CREATE TABLE IF NOT EXISTS app.promotions (
     promotion_id bigserial PRIMARY KEY,
@@ -266,6 +273,8 @@ CREATE TABLE IF NOT EXISTS app.promotion_contacts (
     result_comment text NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_promotion_contacts_promotion_id ON app.promotion_contacts(promotion_id);
+CREATE INDEX IF NOT EXISTS idx_promotion_contacts_client_id ON app.promotion_contacts(client_id);
 
 CREATE TABLE IF NOT EXISTS app.sms_templates (
     template_id bigserial PRIMARY KEY,
@@ -299,6 +308,7 @@ CREATE TABLE IF NOT EXISTS app.work_orders (
 CREATE INDEX IF NOT EXISTS idx_work_orders_opened_at ON app.work_orders(opened_at);
 CREATE INDEX IF NOT EXISTS idx_work_orders_status ON app.work_orders(status);
 CREATE INDEX IF NOT EXISTS idx_work_orders_client_id ON app.work_orders(client_id);
+CREATE INDEX IF NOT EXISTS idx_work_orders_visit_id ON app.work_orders(visit_id);
 
 CREATE TABLE IF NOT EXISTS app.work_order_items (
     item_id bigserial PRIMARY KEY,

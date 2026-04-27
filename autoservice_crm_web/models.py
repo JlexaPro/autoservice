@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, BigInteger, Numeric, Text, Time, func
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Integer, BigInteger, Numeric, Text, Time, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -12,8 +12,8 @@ class User(Base):
     username = Column(Text, unique=True, nullable=False)
     password_hash = Column(Text)
     full_name = Column(Text, nullable=False)
-    role = Column(Text, nullable=False, default="manager")
-    is_active = Column(Boolean, nullable=False, default=True)
+    role = Column(Text, nullable=False, server_default=text("'manager'"))
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -30,7 +30,7 @@ class Employee(Base):
     hourly_rate = Column(Numeric(12, 2))
     comments = Column(Text)
     specialization = Column(Text)
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -43,10 +43,10 @@ class Client(Base):
     phone_raw = Column(Text, nullable=False)
     phone_normalized = Column(Text, nullable=False)
     email = Column(Text)
-    client_tone = Column(Text, nullable=False, default="Нейтральный")
+    client_tone = Column(Text, nullable=False, server_default=text("'Нейтральный'"))
     client_tags = Column(Text)
     manager_comment = Column(Text)
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -79,7 +79,7 @@ class Car(Base):
     plate_number = Column(Text, nullable=False)
     plate_number_normalized = Column(Text)
     vin = Column(Text)
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -105,7 +105,7 @@ class ServiceRequest(Base):
     __table_args__ = {"schema": "app"}
     request_id = Column(BigInteger, primary_key=True)
     external_request_id = Column(Text, unique=True)
-    source_system = Column(Text, nullable=False, default="manual")
+    source_system = Column(Text, nullable=False, server_default=text("'manual'"))
     source_file_name = Column(Text)
     source_created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     import_dttm = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -125,8 +125,8 @@ class ServiceRequest(Base):
     desired_visit_date = Column(Date)
     preferred_contact_slot = Column(Text)
     client_comment = Column(Text)
-    personal_data_consent = Column(Boolean, nullable=False, default=False)
-    request_status = Column(Text, nullable=False, default="Новая")
+    personal_data_consent = Column(Boolean, nullable=False, server_default=text("false"))
+    request_status = Column(Text, nullable=False, server_default=text("'Новая'"))
     raw_payload = Column(JSONB)
 
 
@@ -148,7 +148,7 @@ class ServiceBay(Base):
     service_bay_id = Column(BigInteger, primary_key=True)
     bay_name = Column(Text, nullable=False)
     bay_type = Column(Text)
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
     comment = Column(Text)
 
 
@@ -163,14 +163,20 @@ class AppSetting(Base):
 
 class ServiceVisit(Base):
     __tablename__ = "service_visits"
-    __table_args__ = {"schema": "app"}
+    __table_args__ = (
+        CheckConstraint(
+            "planned_end_at IS NULL OR planned_start_at IS NULL OR planned_end_at > planned_start_at",
+            name="chk_service_visits_time_range",
+        ),
+        {"schema": "app"},
+    )
     visit_id = Column(BigInteger, primary_key=True)
     request_id = Column(BigInteger, ForeignKey("app.service_requests.request_id"))
     client_id = Column(BigInteger, ForeignKey("app.clients.client_id"), nullable=False)
     car_id = Column(BigInteger, ForeignKey("app.cars.car_id"), nullable=False)
-    visit_source = Column(Text, nullable=False, default="request")
-    visit_status = Column(Text, nullable=False, default="Создан")
-    work_type = Column(Text, nullable=False, default="Общее")
+    visit_source = Column(Text, nullable=False, server_default=text("'request'"))
+    visit_status = Column(Text, nullable=False, server_default=text("'Создан'"))
+    work_type = Column(Text, nullable=False, server_default=text("'Общее'"))
     problem_description = Column(Text, nullable=False)
     parts_mode = Column(Text)
     urgency = Column(Text)
@@ -214,7 +220,7 @@ class Followup(Base):
     car_id = Column(BigInteger, ForeignKey("app.cars.car_id"))
     visit_id = Column(BigInteger, ForeignKey("app.service_visits.visit_id"))
     task_type = Column(Text, nullable=False)
-    task_status = Column(Text, nullable=False, default="Открыто")
+    task_status = Column(Text, nullable=False, server_default=text("'Открыто'"))
     due_date = Column(Date, nullable=False)
     preferred_contact_slot = Column(Text)
     title = Column(Text, nullable=False)
@@ -238,14 +244,17 @@ class FollowupHistory(Base):
 
 class ServiceSlot(Base):
     __tablename__ = "service_slots"
-    __table_args__ = {"schema": "app"}
+    __table_args__ = (
+        CheckConstraint("end_time > start_time", name="chk_service_slots_time_range"),
+        {"schema": "app"},
+    )
     slot_id = Column(BigInteger, primary_key=True)
     slot_date = Column(Date, nullable=False)
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)
     service_bay_id = Column(BigInteger, ForeignKey("app.service_bays.service_bay_id"))
     employee_id = Column(BigInteger, ForeignKey("app.employees.employee_id"))
-    slot_status = Column(Text, nullable=False, default="Свободен")
+    slot_status = Column(Text, nullable=False, server_default=text("'Свободен'"))
     visit_id = Column(BigInteger, ForeignKey("app.service_visits.visit_id"))
     comment = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -257,10 +266,9 @@ class Promotion(Base):
     __table_args__ = {"schema": "app"}
     promotion_id = Column(BigInteger, primary_key=True)
     title = Column(Text, nullable=False)
-    description = Column(Text)
     starts_at = Column(Date)
     ends_at = Column(Date)
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
     target_tags = Column(Text)
     target_car_brands = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -273,7 +281,7 @@ class PromotionContact(Base):
     promotion_id = Column(BigInteger, ForeignKey("app.promotions.promotion_id"), nullable=False)
     client_id = Column(BigInteger, ForeignKey("app.clients.client_id"), nullable=False)
     car_id = Column(BigInteger, ForeignKey("app.cars.car_id"))
-    contact_status = Column(Text, nullable=False, default="Запланировано")
+    contact_status = Column(Text, nullable=False, server_default=text("'Запланировано'"))
     planned_date = Column(Date)
     contacted_at = Column(DateTime(timezone=True))
     result_comment = Column(Text)
@@ -287,7 +295,7 @@ class SMSTemplate(Base):
     template_key = Column(Text, nullable=False, unique=True)
     title = Column(Text, nullable=False)
     body = Column(Text, nullable=False)
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -302,15 +310,15 @@ class WorkOrder(Base):
     car_id = Column(BigInteger, ForeignKey("app.cars.car_id"), nullable=False)
     assigned_employee_id = Column(BigInteger, ForeignKey("app.employees.employee_id"))
     service_bay_id = Column(BigInteger, ForeignKey("app.service_bays.service_bay_id"))
-    status = Column(Text, nullable=False, default="Создан")
+    status = Column(Text, nullable=False, server_default=text("'Создан'"))
     opened_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     closed_at = Column(DateTime(timezone=True))
-    work_total = Column(Numeric(12, 2), nullable=False, default=0)
-    parts_total = Column(Numeric(12, 2), nullable=False, default=0)
-    parts_cost_total = Column(Numeric(12, 2), nullable=False, default=0)
-    total_amount = Column(Numeric(12, 2), nullable=False, default=0)
-    total_cost = Column(Numeric(12, 2), nullable=False, default=0)
-    total_profit = Column(Numeric(12, 2), nullable=False, default=0)
+    work_total = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    parts_total = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    parts_cost_total = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    total_amount = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    total_cost = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    total_profit = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
     comment = Column(Text)
 
 
@@ -321,12 +329,12 @@ class WorkOrderItem(Base):
     work_order_id = Column(BigInteger, ForeignKey("app.work_orders.work_order_id", ondelete="CASCADE"), nullable=False)
     work_type = Column(Text, nullable=False)
     description = Column(Text)
-    qty = Column(Numeric(10, 2), nullable=False, default=1)
-    unit_price = Column(Numeric(12, 2), nullable=False, default=0)
-    unit_cost = Column(Numeric(12, 2), nullable=False, default=0)
-    line_total = Column(Numeric(12, 2), nullable=False, default=0)
-    line_cost = Column(Numeric(12, 2), nullable=False, default=0)
-    line_profit = Column(Numeric(12, 2), nullable=False, default=0)
+    qty = Column(Numeric(10, 2), nullable=False, server_default=text("1"))
+    unit_price = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    unit_cost = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    line_total = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    line_cost = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    line_profit = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
 
 
 class WorkOrderPart(Base):
@@ -335,12 +343,12 @@ class WorkOrderPart(Base):
     part_id = Column(BigInteger, primary_key=True)
     work_order_id = Column(BigInteger, ForeignKey("app.work_orders.work_order_id", ondelete="CASCADE"), nullable=False)
     part_name = Column(Text, nullable=False)
-    qty = Column(Numeric(10, 2), nullable=False, default=1)
-    sale_price = Column(Numeric(12, 2), nullable=False, default=0)
-    cost_price = Column(Numeric(12, 2), nullable=False, default=0)
-    line_total = Column(Numeric(12, 2), nullable=False, default=0)
-    line_cost = Column(Numeric(12, 2), nullable=False, default=0)
-    line_profit = Column(Numeric(12, 2), nullable=False, default=0)
+    qty = Column(Numeric(10, 2), nullable=False, server_default=text("1"))
+    sale_price = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    cost_price = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    line_total = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    line_cost = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
+    line_profit = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
 
 
 class WorkOrderStatusHistory(Base):
