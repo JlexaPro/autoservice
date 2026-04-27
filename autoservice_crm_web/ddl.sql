@@ -295,6 +295,7 @@ CREATE TABLE IF NOT EXISTS app.work_orders (
     assigned_employee_id bigint NULL REFERENCES app.employees(employee_id),
     service_bay_id bigint NULL REFERENCES app.service_bays(service_bay_id),
     status text NOT NULL DEFAULT 'Создан',
+    created_at timestamptz NOT NULL DEFAULT now(),
     opened_at timestamptz NOT NULL DEFAULT now(),
     closed_at timestamptz NULL,
     work_total numeric(12,2) NOT NULL DEFAULT 0,
@@ -303,18 +304,24 @@ CREATE TABLE IF NOT EXISTS app.work_orders (
     total_amount numeric(12,2) NOT NULL DEFAULT 0,
     total_cost numeric(12,2) NOT NULL DEFAULT 0,
     total_profit numeric(12,2) NOT NULL DEFAULT 0,
-    comment text NULL
+    comment text NULL,
+    created_by text NULL
 );
 CREATE INDEX IF NOT EXISTS idx_work_orders_opened_at ON app.work_orders(opened_at);
 CREATE INDEX IF NOT EXISTS idx_work_orders_status ON app.work_orders(status);
 CREATE INDEX IF NOT EXISTS idx_work_orders_client_id ON app.work_orders(client_id);
 CREATE INDEX IF NOT EXISTS idx_work_orders_visit_id ON app.work_orders(visit_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_orders_open_visit
+    ON app.work_orders(visit_id)
+    WHERE visit_id IS NOT NULL AND status <> 'Закрыт';
 
 CREATE TABLE IF NOT EXISTS app.work_order_items (
     item_id bigserial PRIMARY KEY,
     work_order_id bigint NOT NULL REFERENCES app.work_orders(work_order_id) ON DELETE CASCADE,
     work_type text NOT NULL,
     description text NULL,
+    employee_id bigint NULL REFERENCES app.employees(employee_id),
+    employee_number text NULL,
     qty numeric(10,2) NOT NULL DEFAULT 1,
     unit_price numeric(12,2) NOT NULL DEFAULT 0,
     unit_cost numeric(12,2) NOT NULL DEFAULT 0,
@@ -327,6 +334,7 @@ CREATE TABLE IF NOT EXISTS app.work_order_parts (
     part_id bigserial PRIMARY KEY,
     work_order_id bigint NOT NULL REFERENCES app.work_orders(work_order_id) ON DELETE CASCADE,
     part_name text NOT NULL,
+    part_number text NULL,
     qty numeric(10,2) NOT NULL DEFAULT 1,
     sale_price numeric(12,2) NOT NULL DEFAULT 0,
     cost_price numeric(12,2) NOT NULL DEFAULT 0,
@@ -344,3 +352,15 @@ CREATE TABLE IF NOT EXISTS app.work_order_status_history (
     changed_by text NULL,
     comment text NULL
 );
+
+CREATE TABLE IF NOT EXISTS app.payments (
+    payment_id bigserial PRIMARY KEY,
+    work_order_id bigint NOT NULL REFERENCES app.work_orders(work_order_id),
+    payment_date timestamptz NOT NULL DEFAULT now(),
+    amount numeric(12,2) NOT NULL,
+    payment_method text NOT NULL DEFAULT 'Наличные',
+    comment text NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    created_by text NULL
+);
+CREATE INDEX IF NOT EXISTS idx_payments_work_order_id ON app.payments(work_order_id);

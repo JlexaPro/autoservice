@@ -311,6 +311,7 @@ class WorkOrder(Base):
     assigned_employee_id = Column(BigInteger, ForeignKey("app.employees.employee_id"))
     service_bay_id = Column(BigInteger, ForeignKey("app.service_bays.service_bay_id"))
     status = Column(Text, nullable=False, server_default=text("'Создан'"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     opened_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     closed_at = Column(DateTime(timezone=True))
     work_total = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
@@ -320,6 +321,7 @@ class WorkOrder(Base):
     total_cost = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
     total_profit = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
     comment = Column(Text)
+    created_by = Column(Text)
 
 
 class WorkOrderItem(Base):
@@ -329,6 +331,8 @@ class WorkOrderItem(Base):
     work_order_id = Column(BigInteger, ForeignKey("app.work_orders.work_order_id", ondelete="CASCADE"), nullable=False)
     work_type = Column(Text, nullable=False)
     description = Column(Text)
+    employee_id = Column(BigInteger, ForeignKey("app.employees.employee_id"))
+    employee_number = Column(Text)
     qty = Column(Numeric(10, 2), nullable=False, server_default=text("1"))
     unit_price = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
     unit_cost = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
@@ -343,6 +347,7 @@ class WorkOrderPart(Base):
     part_id = Column(BigInteger, primary_key=True)
     work_order_id = Column(BigInteger, ForeignKey("app.work_orders.work_order_id", ondelete="CASCADE"), nullable=False)
     part_name = Column(Text, nullable=False)
+    part_number = Column(Text)
     qty = Column(Numeric(10, 2), nullable=False, server_default=text("1"))
     sale_price = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
     cost_price = Column(Numeric(12, 2), nullable=False, server_default=text("0"))
@@ -361,3 +366,16 @@ class WorkOrderStatusHistory(Base):
     changed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     changed_by = Column(Text)
     comment = Column(Text)
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+    __table_args__ = {"schema": "app"}
+    payment_id = Column(BigInteger, primary_key=True)
+    work_order_id = Column(BigInteger, ForeignKey("app.work_orders.work_order_id"), nullable=False)
+    payment_date = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    amount = Column(Numeric(12, 2), nullable=False)
+    payment_method = Column(Text, nullable=False, server_default=text("'Наличные'"))
+    comment = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_by = Column(Text)

@@ -23,6 +23,7 @@ from models import (
     ClientCommentHistory,
     Employee,
     Followup,
+    Payment,
     Promotion,
     RequestStatusHistory,
     AppSetting,
@@ -787,6 +788,7 @@ def create_service_visit(
         db.add(visit)
         db.flush()
         _sync_service_slot(db, visit)
+        _log_service_visit_history_if_changed(db, visit, "", None, None, None, None)
         if request_id:
             req = db.get(ServiceRequest, request_id)
             if req:
@@ -896,7 +898,10 @@ def service_visit_detail(request: Request, visit_id: int, db: Session = Depends(
     if not row:
         raise HTTPException(404, "Визит не найден")
     visit, client, car, employee, bay = row
-    return templates.TemplateResponse("visit_detail.html", {"request": request, "visit": visit, "client": client, "car": car, "employee": employee, "bay": bay})
+    work_order = db.execute(
+        select(WorkOrder).where(WorkOrder.visit_id == visit_id).order_by(WorkOrder.work_order_id.desc())
+    ).scalars().first()
+    return templates.TemplateResponse("visit_detail.html", {"request": request, "visit": visit, "client": client, "car": car, "employee": employee, "bay": bay, "work_order": work_order})
 
 
 @app.get("/followups")
@@ -1083,6 +1088,33 @@ def finance_page(request: Request, start_date: date | None = None, end_date: dat
     total_master_profit = sum(float(v.master_profit or 0) for v, _, _, _ in visits)
     service_profit = total_revenue - total_master_profit
     avg_check = total_revenue / len(visits) if visits else 0
+    closed_orders = db.execute(
+        select(WorkOrder).where(
+            WorkOrder.status == "Закрыт",
+            cast(WorkOrder.closed_at, Date) >= start_date,
+            cast(WorkOrder.closed_at, Date) <= end_date,
+        )
+    ).scalars().all()
+    wo_revenue = sum(float(w.total_amount or 0) for w in closed_orders)
+    wo_cost = sum(float(w.total_cost or 0) for w in closed_orders)
+    wo_profit = sum(float(w.total_profit or 0) for w in closed_orders)
+    wo_avg_check = wo_revenue / len(closed_orders) if closed_orders else 0
+    top_work_rows = db.execute(
+        select(WorkOrderItem.work_type, func.sum(WorkOrderItem.line_total))
+        .join(WorkOrder, WorkOrder.work_order_id == WorkOrderItem.work_order_id)
+        .where(WorkOrder.status == "Закрыт", cast(WorkOrder.closed_at, Date) >= start_date, cast(WorkOrder.closed_at, Date) <= end_date)
+        .group_by(WorkOrderItem.work_type)
+        .order_by(func.sum(WorkOrderItem.line_total).desc())
+        .limit(10)
+    ).all()
+    top_part_rows = db.execute(
+        select(WorkOrderPart.part_name, func.sum(WorkOrderPart.line_total))
+        .join(WorkOrder, WorkOrder.work_order_id == WorkOrderPart.work_order_id)
+        .where(WorkOrder.status == "Закрыт", cast(WorkOrder.closed_at, Date) >= start_date, cast(WorkOrder.closed_at, Date) <= end_date)
+        .group_by(WorkOrderPart.part_name)
+        .order_by(func.sum(WorkOrderPart.line_total).desc())
+        .limit(10)
+    ).all()
     by_master: dict[str, dict] = {}
     by_client: dict[str, float] = {}
     by_work_type: dict[str, float] = {}
@@ -1104,6 +1136,13 @@ def finance_page(request: Request, start_date: date | None = None, end_date: dat
         "total_master_profit": total_master_profit,
         "service_profit": service_profit,
         "avg_check": avg_check,
+        "wo_revenue": wo_revenue,
+        "wo_cost": wo_cost,
+        "wo_profit": wo_profit,
+        "wo_avg_check": wo_avg_check,
+        "closed_orders_count": len(closed_orders),
+        "top_works": top_work_rows,
+        "top_parts": top_part_rows,
         "by_master": sorted(by_master.items(), key=lambda x: x[0]),
         "by_client": sorted(by_client.items(), key=lambda x: x[1], reverse=True)[:10],
         "by_work_type": sorted(by_work_type.items(), key=lambda x: x[1], reverse=True),
@@ -1145,6 +1184,44 @@ def work_order_new_form(request: Request, error: str = "", db: Session = Depends
     return templates.TemplateResponse("work_order_new.html", {"request": request, "clients": clients, "cars": cars, "employees": employees, "bays": bays, "error": error})
 
 
+@app.post("/visits/{visit_id}/work-order")
+def create_work_order_from_visit(visit_id: int, db: Session = Depends(get_db)):
+    visit = db.get(ServiceVisit, visit_id)
+    if not visit:
+        return RedirectResponse("/planner?error=Визит не найден", status_code=303)
+    existing_open = db.execute(
+        select(WorkOrder).where(WorkOrder.visit_id == visit_id, WorkOrder.status != "Закрыт")
+    ).scalars().first()
+    if existing_open:
+        return RedirectResponse(f"/work-orders/{existing_open.work_order_id}", status_code=303)
+    existing_any = db.execute(select(WorkOrder).where(WorkOrder.visit_id == visit_id)).scalars().first()
+    if existing_any and existing_any.status != "Закрыт":
+        return RedirectResponse(f"/work-orders/{existing_any.work_order_id}", status_code=303)
+    try:
+        order_number = f"WO-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        wo = WorkOrder(
+            order_number=order_number,
+            request_id=visit.request_id,
+            visit_id=visit.visit_id,
+            client_id=visit.client_id,
+            car_id=visit.car_id,
+            assigned_employee_id=visit.assigned_employee_id,
+            service_bay_id=visit.service_bay_id,
+            status="Открыт",
+            created_by="manager",
+            comment="Создан из визита",
+        )
+        db.add(wo)
+        db.flush()
+        db.add(WorkOrderStatusHistory(work_order_id=wo.work_order_id, old_status=None, new_status="Открыт", changed_by="manager"))
+        safe_commit(db)
+        return RedirectResponse(f"/work-orders/{wo.work_order_id}", status_code=303)
+    except Exception as e:
+        db.rollback()
+        logger.exception("create_work_order_from_visit failed: %s", e)
+        return RedirectResponse(f"/service_visits/{visit_id}?error=Не удалось создать заказ-наряд", status_code=303)
+
+
 @app.post("/work-orders/new")
 def work_order_new(
     client_id: int = Form(...),
@@ -1163,11 +1240,12 @@ def work_order_new(
             assigned_employee_id=none_if_empty(assigned_employee_id),
             service_bay_id=none_if_empty(service_bay_id),
             comment=none_if_empty(comment),
-            status="Создан",
+            status="Открыт",
+            created_by="manager",
         )
         db.add(wo)
         db.flush()
-        db.add(WorkOrderStatusHistory(work_order_id=wo.work_order_id, old_status=None, new_status="Создан", changed_by="manager"))
+        db.add(WorkOrderStatusHistory(work_order_id=wo.work_order_id, old_status=None, new_status="Открыт", changed_by="manager"))
         safe_commit(db)
     except Exception as e:
         db.rollback()
@@ -1185,9 +1263,26 @@ def work_order_detail(request: Request, work_order_id: int, db: Session = Depend
     car = db.get(Car, wo.car_id)
     items = db.execute(select(WorkOrderItem).where(WorkOrderItem.work_order_id == work_order_id)).scalars().all()
     parts = db.execute(select(WorkOrderPart).where(WorkOrderPart.work_order_id == work_order_id)).scalars().all()
+    payments = db.execute(select(Payment).where(Payment.work_order_id == work_order_id).order_by(Payment.payment_date.desc())).scalars().all()
     history = db.execute(select(WorkOrderStatusHistory).where(WorkOrderStatusHistory.work_order_id == work_order_id).order_by(WorkOrderStatusHistory.changed_at.desc())).scalars().all()
     employees = db.execute(select(Employee).where(Employee.is_active.is_(True))).scalars().all()
-    return templates.TemplateResponse("work_order_detail.html", {"request": request, "wo": wo, "client": client, "car": car, "items": items, "parts": parts, "history": history, "employees": employees})
+    margin_pct = (float(wo.total_profit or 0) / float(wo.total_amount) * 100) if float(wo.total_amount or 0) > 0 else 0
+    paid_total = sum(float(p.amount or 0) for p in payments)
+    due_total = float(wo.total_amount or 0) - paid_total
+    return templates.TemplateResponse("work_order_detail.html", {
+        "request": request,
+        "wo": wo,
+        "client": client,
+        "car": car,
+        "items": items,
+        "parts": parts,
+        "payments": payments,
+        "paid_total": paid_total,
+        "due_total": due_total,
+        "margin_pct": margin_pct,
+        "history": history,
+        "employees": employees,
+    })
 
 
 @app.get("/work-orders/{work_order_id}/export.pdf")
@@ -1241,7 +1336,7 @@ def work_order_pdf(work_order_id: int, db: Session = Depends(get_db)):
         y -= 13
     y -= 15
     pdf.setFont(font_name, 11)
-    pdf.drawString(40, y, f"Итого: {wo.total_amount} | Себестоимость: {wo.total_cost} | Прибыль: {wo.total_profit}")
+    pdf.drawString(40, y, f"Итого к оплате: {wo.total_amount}")
     pdf.showPage()
     pdf.save()
     buff.seek(0)
@@ -1249,14 +1344,38 @@ def work_order_pdf(work_order_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/work-orders/{work_order_id}/items")
-def add_work_order_item(work_order_id: int, work_type: str = Form(...), description: str = Form(default=""), qty: float = Form(1), unit_price: float = Form(0), unit_cost: float = Form(0), db: Session = Depends(get_db)):
+def add_work_order_item(
+    work_order_id: int,
+    work_type: str = Form(...),
+    description: str = Form(default=""),
+    qty: float = Form(1),
+    unit_price: float = Form(0),
+    unit_cost: float = Form(0),
+    employee_id: str = Form(default=""),
+    employee_number: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
     wo = db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(404, "Заказ-наряд не найден")
     try:
+        employee_id_int = int(employee_id) if none_if_empty(employee_id) else None
+        employee = db.get(Employee, employee_id_int) if employee_id_int else None
         line_total = qty * unit_price
         line_cost = qty * unit_cost
-        db.add(WorkOrderItem(work_order_id=work_order_id, work_type=work_type, description=none_if_empty(description), qty=qty, unit_price=unit_price, unit_cost=unit_cost, line_total=line_total, line_cost=line_cost, line_profit=line_total - line_cost))
+        db.add(WorkOrderItem(
+            work_order_id=work_order_id,
+            work_type=work_type,
+            description=none_if_empty(description),
+            employee_id=employee_id_int,
+            employee_number=(employee.full_name if employee else normalize_nullable_text(employee_number)),
+            qty=qty,
+            unit_price=unit_price,
+            unit_cost=unit_cost,
+            line_total=line_total,
+            line_cost=line_cost,
+            line_profit=line_total - line_cost,
+        ))
         recalc_work_order_totals(db, wo)
         safe_commit(db)
     except Exception as e:
@@ -1267,14 +1386,14 @@ def add_work_order_item(work_order_id: int, work_type: str = Form(...), descript
 
 
 @app.post("/work-orders/{work_order_id}/parts")
-def add_work_order_part(work_order_id: int, part_name: str = Form(...), qty: float = Form(1), sale_price: float = Form(0), cost_price: float = Form(0), db: Session = Depends(get_db)):
+def add_work_order_part(work_order_id: int, part_name: str = Form(...), part_number: str = Form(default=""), qty: float = Form(1), sale_price: float = Form(0), cost_price: float = Form(0), db: Session = Depends(get_db)):
     wo = db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(404, "Заказ-наряд не найден")
     try:
         line_total = qty * sale_price
         line_cost = qty * cost_price
-        db.add(WorkOrderPart(work_order_id=work_order_id, part_name=part_name, qty=qty, sale_price=sale_price, cost_price=cost_price, line_total=line_total, line_cost=line_cost, line_profit=line_total - line_cost))
+        db.add(WorkOrderPart(work_order_id=work_order_id, part_name=part_name, part_number=normalize_nullable_text(part_number), qty=qty, sale_price=sale_price, cost_price=cost_price, line_total=line_total, line_cost=line_cost, line_profit=line_total - line_cost))
         recalc_work_order_totals(db, wo)
         safe_commit(db)
     except Exception as e:
@@ -1285,19 +1404,70 @@ def add_work_order_part(work_order_id: int, part_name: str = Form(...), qty: flo
 
 
 @app.post("/work-orders/{work_order_id}/status")
-def update_work_order_status(work_order_id: int, status: str = Form(...), db: Session = Depends(get_db)):
+def update_work_order_status(
+    work_order_id: int,
+    status: str = Form(...),
+    payment_amount: str = Form(default=""),
+    payment_method: str = Form(default="Наличные"),
+    payment_comment: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
     wo = db.get(WorkOrder, work_order_id)
     if not wo:
         raise HTTPException(404, "Заказ-наряд не найден")
-    if wo.status == status:
+    if wo.status == "Закрыт":
+        return RedirectResponse(f"/work-orders/{work_order_id}?error=Заказ-наряд уже закрыт", status_code=303)
+    if wo.status == status and status != "Закрыт":
         return RedirectResponse(f"/work-orders/{work_order_id}", status_code=303)
     try:
+        recalc_work_order_totals(db, wo)
+        items_cnt = db.scalar(select(func.count()).select_from(WorkOrderItem).where(WorkOrderItem.work_order_id == work_order_id)) or 0
+        parts_cnt = db.scalar(select(func.count()).select_from(WorkOrderPart).where(WorkOrderPart.work_order_id == work_order_id)) or 0
+        if status == "Закрыт" and (items_cnt + parts_cnt) == 0:
+            return RedirectResponse(f"/work-orders/{work_order_id}?error=Нельзя закрыть пустой заказ-наряд", status_code=303)
         old = wo.status
         wo.status = status
         if status == "Закрыт":
+            allowed_methods = {"Наличные", "Карта", "Перевод", "Смешанная оплата"}
+            payment_method = payment_method if payment_method in allowed_methods else "Наличные"
+            amount = float(payment_amount) if none_if_empty(payment_amount) else float(wo.total_amount or 0)
+            if amount <= 0:
+                return RedirectResponse(f"/work-orders/{work_order_id}?error=Сумма оплаты должна быть больше 0", status_code=303)
+            if amount > float(wo.total_amount or 0):
+                return RedirectResponse(f"/work-orders/{work_order_id}?error=Оплата больше суммы заказ-наряда", status_code=303)
+            db.add(Payment(
+                work_order_id=work_order_id,
+                amount=amount,
+                payment_method=payment_method,
+                comment=normalize_nullable_text(payment_comment),
+                created_by="manager",
+            ))
             wo.closed_at = datetime.utcnow()
-            for days, title in [(7, "Проверить результат ремонта"), (30, "Плановый follow-up после ремонта")]:
-                db.add(Followup(client_id=wo.client_id, car_id=wo.car_id, task_type="repair_followup", title=title, description=f"Авто-follow-up по заказ-наряду {wo.order_number}", due_date=(date.today() + timedelta(days=days))))
+            if wo.visit_id:
+                visit = db.get(ServiceVisit, wo.visit_id)
+                if visit:
+                    old_visit_status = visit.visit_status
+                    old_start = visit.planned_start_at
+                    old_end = visit.planned_end_at
+                    old_emp = visit.assigned_employee_number
+                    old_bay = visit.service_bay_id
+                    visit.visit_status = "Завершён"
+                    visit.completed_at = datetime.utcnow()
+                    _log_service_visit_history_if_changed(db, visit, old_visit_status, old_start, old_end, old_emp, old_bay)
+                    if visit.request_id:
+                        req = db.get(ServiceRequest, visit.request_id)
+                        if req:
+                            change_request_status(db, req, "Закрыта", comment=f"Заказ-наряд {wo.order_number} закрыт")
+            db.add(Followup(
+                request_id=wo.request_id,
+                client_id=wo.client_id,
+                car_id=wo.car_id,
+                task_type="service_reminder",
+                title="Напомнить о повторном обслуживании",
+                description=f"Follow-up после закрытия заказ-наряда {wo.order_number}",
+                due_date=(date.today() + timedelta(days=90)),
+                task_status="Открыто",
+            ))
         db.add(WorkOrderStatusHistory(work_order_id=work_order_id, old_status=old, new_status=status, changed_by="manager"))
         safe_commit(db)
     except Exception as e:

@@ -1,30 +1,40 @@
 {% extends 'base.html' %}
 {% block content %}
 <h1>Заказ-наряд {{ wo.order_number }}</h1>
+{% if request.query_params.get('error') %}<p class="error">{{ request.query_params.get('error') }}</p>{% endif %}
 <p><a class="btn" href="/work-orders/{{ wo.work_order_id }}/export.pdf">Скачать PDF</a></p>
-<p>Статус: <b>{{ wo.status }}</b> | Сумма: <b>{{ wo.total_amount }}</b> | Себестоимость: <b>{{ wo.total_cost }}</b> | Прибыль: <b>{{ wo.total_profit }}</b></p>
-<p>Клиент: {{ client.full_name }} | Авто: {{ car.brand }} {{ car.model }} {{ car.plate_number }}</p>
+<p>Статус: <b>{{ wo.status }}</b> | Сумма: <b>{{ wo.total_amount }}</b> | Себестоимость: <b>{{ wo.total_cost }}</b> | Прибыль: <b>{{ wo.total_profit }}</b> | Маржа: <b>{{ '%.1f'|format(margin_pct) }}%</b></p>
+<p>Клиент: {{ client.full_name }} | Авто: {{ car.brand }} {{ car.model }} {{ car.plate_number }} | Визит: {% if wo.visit_id %}<a href="/service_visits/{{ wo.visit_id }}">#{{ wo.visit_id }}</a>{% else %}—{% endif %}</p>
 <form method="post" action="/work-orders/{{ wo.work_order_id }}/status" class="form-grid" style="max-width:260px">
-  <select name="status"><option>Создан</option><option>В работе</option><option>Готов</option><option>Закрыт</option></select>
+  <select name="status"><option>Открыт</option><option>В работе</option><option>Готов</option><option>Закрыт</option></select>
+  <input type="number" step="0.01" min="0" name="payment_amount" placeholder="Сумма оплаты (при закрытии)">
+  <select name="payment_method"><option>Наличные</option><option>Карта</option><option>Перевод</option><option>Смешанная оплата</option></select>
+  <input name="payment_comment" placeholder="Комментарий к оплате">
   <button class="btn">Сменить статус</button>
 </form>
 <h3>Работы</h3>
 <form method="post" action="/work-orders/{{ wo.work_order_id }}/items" class="form-grid">
   <input name="work_type" placeholder="Тип работ" required>
   <input name="description" placeholder="Описание">
+  <select name="employee_id"><option value="">Мастер (не указан)</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select>
+  <input name="employee_number" placeholder="Табельный номер/ФИО мастера">
   <input type="number" step="0.01" name="qty" placeholder="Количество" required>
   <input type="number" step="0.01" name="unit_price" placeholder="Цена" required>
   <input type="number" step="0.01" name="unit_cost" placeholder="Себестоимость" required>
   <button class="btn">Добавить работу</button>
 </form>
-<table><tr><th>Тип</th><th>Кол-во</th><th>Цена</th><th>Себестоимость</th><th>Прибыль</th></tr>{% for i in items %}<tr><td>{{ i.work_type }}</td><td>{{ i.qty }}</td><td>{{ i.line_total }}</td><td>{{ i.line_cost }}</td><td>{{ i.line_profit }}</td></tr>{% endfor %}</table>
+<table><tr><th>Тип</th><th>Мастер</th><th>Кол-во</th><th>Цена</th><th>Себестоимость</th><th>Прибыль</th></tr>{% for i in items %}<tr><td>{{ i.work_type }}</td><td>{{ i.employee_number or '' }}</td><td>{{ i.qty }}</td><td>{{ i.line_total }}</td><td>{{ i.line_cost }}</td><td>{{ i.line_profit }}</td></tr>{% endfor %}</table>
 <h3>Запчасти</h3>
 <form method="post" action="/work-orders/{{ wo.work_order_id }}/parts" class="form-grid">
   <input name="part_name" placeholder="Запчасть" required>
+  <input name="part_number" placeholder="Артикул">
   <input type="number" step="0.01" name="qty" placeholder="Количество" required>
   <input type="number" step="0.01" name="sale_price" placeholder="Цена продажи" required>
   <input type="number" step="0.01" name="cost_price" placeholder="Себестоимость" required>
   <button class="btn">Добавить запчасть</button>
 </form>
-<table><tr><th>Запчасть</th><th>Кол-во</th><th>Продажа</th><th>Себестоимость</th><th>Прибыль</th></tr>{% for p in parts %}<tr><td>{{ p.part_name }}</td><td>{{ p.qty }}</td><td>{{ p.line_total }}</td><td>{{ p.line_cost }}</td><td>{{ p.line_profit }}</td></tr>{% endfor %}</table>
+<table><tr><th>Запчасть</th><th>Артикул</th><th>Кол-во</th><th>Продажа</th><th>Себестоимость</th><th>Прибыль</th></tr>{% for p in parts %}<tr><td>{{ p.part_name }}</td><td>{{ p.part_number or '' }}</td><td>{{ p.qty }}</td><td>{{ p.line_total }}</td><td>{{ p.line_cost }}</td><td>{{ p.line_profit }}</td></tr>{% endfor %}</table>
+<h3>Оплаты</h3>
+<p>Оплачено: <b>{{ '%.2f'|format(paid_total) }}</b> | Остаток: <b>{{ '%.2f'|format(due_total) }}</b></p>
+<table><tr><th>Дата</th><th>Сумма</th><th>Способ</th><th>Комментарий</th></tr>{% for p in payments %}<tr><td>{{ p.payment_date }}</td><td>{{ p.amount }}</td><td>{{ p.payment_method }}</td><td>{{ p.comment or '' }}</td></tr>{% endfor %}</table>
 {% endblock %}

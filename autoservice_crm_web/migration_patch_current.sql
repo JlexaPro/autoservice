@@ -12,6 +12,17 @@ CREATE TABLE IF NOT EXISTS app.sms_templates (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS app.payments (
+    payment_id bigserial PRIMARY KEY,
+    work_order_id bigint NOT NULL REFERENCES app.work_orders(work_order_id),
+    payment_date timestamptz NOT NULL DEFAULT now(),
+    amount numeric(12,2) NOT NULL,
+    payment_method text NOT NULL DEFAULT 'Наличные',
+    comment text NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    created_by text NULL
+);
+
 ALTER TABLE IF EXISTS app.employees
     ADD COLUMN IF NOT EXISTS birth_date date,
     ADD COLUMN IF NOT EXISTS hourly_rate numeric(12,2),
@@ -68,7 +79,12 @@ ALTER TABLE IF EXISTS app.promotion_contacts
     ALTER COLUMN created_at SET DEFAULT now();
 
 ALTER TABLE IF EXISTS app.work_orders
+    ADD COLUMN IF NOT EXISTS created_at timestamptz,
+    ADD COLUMN IF NOT EXISTS created_by text;
+
+ALTER TABLE IF EXISTS app.work_orders
     ALTER COLUMN status SET DEFAULT 'Создан',
+    ALTER COLUMN created_at SET DEFAULT now(),
     ALTER COLUMN opened_at SET DEFAULT now(),
     ALTER COLUMN work_total SET DEFAULT 0,
     ALTER COLUMN parts_total SET DEFAULT 0,
@@ -78,12 +94,19 @@ ALTER TABLE IF EXISTS app.work_orders
     ALTER COLUMN total_profit SET DEFAULT 0;
 
 ALTER TABLE IF EXISTS app.work_order_items
+    ADD COLUMN IF NOT EXISTS employee_id bigint,
+    ADD COLUMN IF NOT EXISTS employee_number text;
+
+ALTER TABLE IF EXISTS app.work_order_items
     ALTER COLUMN qty SET DEFAULT 1,
     ALTER COLUMN unit_price SET DEFAULT 0,
     ALTER COLUMN unit_cost SET DEFAULT 0,
     ALTER COLUMN line_total SET DEFAULT 0,
     ALTER COLUMN line_cost SET DEFAULT 0,
     ALTER COLUMN line_profit SET DEFAULT 0;
+
+ALTER TABLE IF EXISTS app.work_order_parts
+    ADD COLUMN IF NOT EXISTS part_number text;
 
 ALTER TABLE IF EXISTS app.work_order_parts
     ALTER COLUMN qty SET DEFAULT 1,
@@ -121,6 +144,23 @@ CREATE INDEX IF NOT EXISTS idx_work_orders_opened_at ON app.work_orders(opened_a
 CREATE INDEX IF NOT EXISTS idx_work_orders_status ON app.work_orders(status);
 CREATE INDEX IF NOT EXISTS idx_work_orders_client_id ON app.work_orders(client_id);
 CREATE INDEX IF NOT EXISTS idx_work_orders_visit_id ON app.work_orders(visit_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_orders_open_visit ON app.work_orders(visit_id) WHERE visit_id IS NOT NULL AND status <> 'Закрыт';
+CREATE INDEX IF NOT EXISTS idx_payments_work_order_id ON app.payments(work_order_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'app' AND t.relname = 'work_order_items' AND c.conname = 'work_order_items_employee_id_fkey'
+    ) THEN
+        ALTER TABLE app.work_order_items
+            ADD CONSTRAINT work_order_items_employee_id_fkey
+            FOREIGN KEY (employee_id) REFERENCES app.employees(employee_id);
+    END IF;
+END $$;
 
 DO $$
 BEGIN

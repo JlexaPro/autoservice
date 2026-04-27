@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from db import SessionLocal
-from models import Car, Client, ServiceVisit, WorkOrder, WorkOrderItem
+from models import Car, Client, Payment, ServiceVisit, WorkOrder, WorkOrderItem
 from services import create_request_with_relations, format_phone_ru, normalize_phone
 
 
@@ -108,6 +108,7 @@ def main() -> int:
         # 8) close work order
         wo.status = "Закрыт"
         wo.closed_at = datetime.utcnow()
+        db.add(Payment(work_order_id=wo.work_order_id, amount=1000, payment_method="Наличные", created_by="smoke"))
         db.commit()
         print("[smoke] work order closed")
 

@@ -9,4 +9,11 @@
 <p><b>Вид работы:</b> {{ visit.work_type }}</p>
 <p><b>Проблема:</b> {{ visit.problem_description }}</p>
 <p><b>Стоимость:</b> {{ visit.work_cost or 0 }} ₽ | <b>Прибыль мастера:</b> {{ visit.master_profit or 0 }} ₽</p>
+{% if work_order %}
+<p><a class="btn" href="/work-orders/{{ work_order.work_order_id }}">Открыть заказ-наряд</a></p>
+{% else %}
+<form method="post" action="/visits/{{ visit.visit_id }}/work-order">
+  <button class="btn">Создать заказ-наряд</button>
+</form>
+{% endif %}
 {% endblock %}

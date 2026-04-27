@@ -12,6 +12,11 @@
   <div class="card">Прибыль мастеров: <b>{{ '%.2f'|format(total_master_profit) }} ₽</b></div>
   <div class="card">Прибыль сервиса: <b>{{ '%.2f'|format(service_profit) }} ₽</b></div>
   <div class="card">Средний чек: <b>{{ '%.2f'|format(avg_check) }} ₽</b></div>
+  <div class="card">Закрытых заказ-нарядов: <b>{{ closed_orders_count }}</b></div>
+  <div class="card">Выручка по ЗН: <b>{{ '%.2f'|format(wo_revenue) }} ₽</b></div>
+  <div class="card">Себестоимость по ЗН: <b>{{ '%.2f'|format(wo_cost) }} ₽</b></div>
+  <div class="card">Прибыль по ЗН: <b>{{ '%.2f'|format(wo_profit) }} ₽</b></div>
+  <div class="card">Средний чек по ЗН: <b>{{ '%.2f'|format(wo_avg_check) }} ₽</b></div>
 </div>
 <h3>По мастерам</h3>
 <table><tr><th>Мастер</th><th>Визитов</th><th>Выручка</th><th>Прибыль мастера</th></tr>
@@ -24,6 +29,14 @@
 <h3>Выручка по типам работ</h3>
 <table><tr><th>Тип работ</th><th>Выручка</th></tr>
 {% for wt, amount in by_work_type %}<tr><td>{{ wt }}</td><td>{{ '%.2f'|format(amount) }}</td></tr>{% endfor %}
+</table>
+<h3>ТОП работ (закрытые заказ-наряды)</h3>
+<table><tr><th>Работа</th><th>Выручка</th></tr>
+{% for wt, amount in top_works %}<tr><td>{{ wt }}</td><td>{{ '%.2f'|format(amount) }}</td></tr>{% endfor %}
+</table>
+<h3>ТОП запчастей (закрытые заказ-наряды)</h3>
+<table><tr><th>Запчасть</th><th>Выручка</th></tr>
+{% for pn, amount in top_parts %}<tr><td>{{ pn }}</td><td>{{ '%.2f'|format(amount) }}</td></tr>{% endfor %}
 </table>
 <h3>Детализация визитов</h3>
 <table><tr><th>Дата</th><th>Клиент</th><th>Авто</th><th>Мастер</th><th>Вид работы</th><th>Стоимость</th><th>Прибыль мастера</th><th>Прибыль сервиса</th></tr>
