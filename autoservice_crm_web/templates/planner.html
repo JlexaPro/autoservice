@@ -1,0 +1,157 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Планер сервиса (интерактивный)</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="get" class="form-grid" style="max-width:680px;grid-template-columns:repeat(7,minmax(80px,1fr));align-items:end">
+  <label>Дата <input type="date" name="day" value="{{ day }}"></label>
+  <label>Шаг
+    <select name="grid_step">
+      <option value="30" {% if step_min==30 %}selected{% endif %}>30 мин</option>
+      <option value="60" {% if step_min==60 %}selected{% endif %}>60 мин</option>
+    </select>
+  </label>
+  <button class="btn">Открыть</button>
+  <a class="btn" href="/planner?day={{ today }}&grid_step={{ step_min }}">Сегодня</a>
+  <a class="btn" href="/planner?day={{ tomorrow }}&grid_step={{ step_min }}">Завтра</a>
+  <a class="btn" href="/planner?day={{ prev_day }}&grid_step={{ step_min }}">← Назад</a>
+  <a class="btn" href="/planner?day={{ next_day }}&grid_step={{ step_min }}">Вперёд →</a>
+</form>
+<p><a class="btn" target="_blank" href="/planner/print?day={{ day }}">Печать плана на день</a></p>
+<div class="cards">
+  {% for b in bays %}<div class="card">{{ b.bay_name }}: загрузка <b>{{ bay_load[b.service_bay_id] }}%</b></div>{% endfor %}
+</div>
+<h3>Свободные окна сегодня</h3>
+<ul>
+  {% for b in bays %}
+    <li><b>{{ b.bay_name }}</b>: {% if free_windows[b.service_bay_id] %}{{ free_windows[b.service_bay_id]|join(', ') }}{% else %}нет свободных окон{% endif %}</li>
+  {% endfor %}
+</ul>
+
+<div id="planner-board" class="planner-board" style="--bay-count: {{ bays|length }};" data-day="{{ day }}" data-start-time="{{ start_time }}" data-step-min="{{ step_min }}" data-day-minutes="{{ day_minutes }}">
+  <div class="time-col">
+    {% for t in times %}<div class="time-mark" style="height: {{ step_min*2 }}px">{{ t }}</div>{% endfor %}
+  </div>
+  {% for b in bays %}
+  <div class="bay-col" data-bay-id="{{ b.service_bay_id }}">
+    <div class="bay-title">{{ b.bay_name }}</div>
+    <div class="bay-grid" style="height: {{ day_minutes*2 }}px">
+      {% for t in times %}<div class="grid-line" style="height: {{ step_min*2 }}px"></div>{% endfor %}
+      {% for v in visit_blocks if v.bay_id == b.service_bay_id %}
+      <div class="visit-card {% if v.has_conflict %}conflict{% endif %} status-{{ v.status|lower|replace(' ','-') }}"
+           data-visit-id="{{ v.visit_id }}"
+           data-top="{{ v.top }}"
+           data-height="{{ v.height }}"
+           data-bay-id="{{ v.bay_id }}"
+           data-request-id="{{ v.request_id or '' }}"
+           data-employee-id="{{ v.employee_id or '' }}"
+           data-client="{{ v.client }}"
+           data-car="{{ v.car }} {{ v.plate }}"
+           data-problem="{{ v.problem }}"
+           data-status="{{ v.status }}"
+           data-work-type="{{ v.work_type }}"
+           data-service-comment="{{ v.service_comment }}"
+           data-work-cost="{{ v.work_cost }}"
+           data-master-profit="{{ v.master_profit }}"
+           style="top: {{ v.top*2 }}px; height: {{ v.height*2 }}px;">
+        <div class="visit-content">
+          <b>{{ v.start }}–{{ v.end }}</b><br>
+          {{ v.client }}<br>{{ v.car }} {{ v.plate }}<br>{{ v.problem }}<br>Статус: {{ v.status }}<br>Мастер: {{ v.employee or '—' }}
+          <div class="visit-actions">
+            <form method="post" action="/service_visits/{{ v.visit_id }}/action"><input type="hidden" name="day" value="{{ day }}"><button class="btn" name="action" value="start">Начать</button><button class="btn" name="action" value="finish">Завершить</button><button class="btn" name="action" value="cancel">Отменить</button></form>
+            <form method="post" action="/visits/{{ v.visit_id }}/work-order"><button class="btn">Заказ-наряд</button></form>
+          </div>
+        </div>
+        <div class="resize-handle"></div>
+      </div>
+      {% endfor %}
+      {% for t in times %}
+      <button type="button" class="free-slot-btn" data-bay-id="{{ b.service_bay_id }}" data-start="{{ t }}" style="top: {{ loop.index0 * step_min*2 }}px;">+ Записать</button>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div id="visit-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Редактировать визит</h3>
+    <form id="visit-edit-form" class="form-grid">
+      <input type="hidden" name="visit_id">
+      <label>Клиент <input name="client" disabled></label>
+      <label>Авто <input name="car" disabled></label>
+      <label>Проблема <textarea name="problem_description"></textarea></label>
+      <label>Заявка <input name="request_id" placeholder="ID заявки"></label>
+      <label>Статус
+        <select name="visit_status">
+          <option>Создан</option><option>Связались</option><option>Записан</option><option>В работе</option><option>Завершён</option><option>Отменён</option>
+        </select>
+      </label>
+      <label>Дата <input type="date" name="day" value="{{ day }}"></label>
+      <label>Начало <input type="time" name="start_time"></label>
+      <label>Окончание <input type="time" name="end_time"></label>
+      <label>Вид работы <input name="work_type"></label>
+      <label>Комментарий <textarea name="service_comment"></textarea></label>
+      <label>Стоимость работ <input type="number" step="0.01" min="0" name="work_cost"></label>
+      <label>Прибыль мастера <input type="number" step="0.01" min="0" name="master_profit"></label>
+      <label>Пост
+        <select name="service_bay_id">{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select>
+      </label>
+      <label>Мастер
+        <select name="employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select>
+      </label>
+      <div>
+        <button class="btn" type="submit">Сохранить</button>
+        <button class="btn" type="button" id="modal-close">Закрыть</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<h3>Создать визит</h3>
+<form method="post" action="/service_visits" class="form-grid">
+  <div>
+    Быстрые сценарии:
+    <button class="btn quick-work" type="button" data-work="ТО">ТО</button>
+    <button class="btn quick-work" type="button" data-work="Тормоза">Тормоза</button>
+    <button class="btn quick-work" type="button" data-work="Подвеска">Подвеска</button>
+    <button class="btn" id="auto-assign" type="button">Автоназначение</button>
+  </div>
+  <input type="date" name="day" value="{{ day }}" required>
+  <input type="time" name="start_time" value="09:00" required>
+  <input type="time" name="end_time" value="10:00" required>
+  <select name="service_bay_id">{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select>
+  <select name="client_id">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }}</option>{% endfor %}</select>
+  <input name="car_id" list="cars-list" placeholder="ID|Марка Модель Госномер" required>
+  <datalist id="cars-list">{% for car in cars %}<option value="{{ car.car_id }}|{{ car.brand }} {{ car.model }} {{ car.plate_number }}"></option>{% endfor %}</datalist>
+  <input name="request_id" placeholder="ID заявки (если есть)">
+  <select name="employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select>
+  <input name="work_type" placeholder="Вид работы" required>
+  <textarea name="problem_description" required placeholder="Проблема"></textarea>
+  <input type="number" step="0.01" min="0" name="work_cost" placeholder="Стоимость работ (₽)">
+  <input type="number" step="0.01" min="0" name="master_profit" placeholder="Прибыль мастера (₽)">
+  <button class="btn">Создать визит</button>
+</form>
+
+<div id="create-slot-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Создать запись в слоте</h3>
+    <form id="create-slot-form" method="post" action="/service_visits" class="form-grid">
+      <label>Дата <input type="date" name="day" value="{{ day }}"></label>
+      <label>Начало <input type="time" name="start_time"></label>
+      <label>Окончание <input type="time" name="end_time"></label>
+      <label>Пост <select name="service_bay_id">{% for b in bays %}<option value="{{ b.service_bay_id }}">{{ b.bay_name }}</option>{% endfor %}</select></label>
+      <label>Клиент <select name="client_id">{% for c in clients %}<option value="{{ c.client_id }}">{{ c.full_name }}</option>{% endfor %}</select></label>
+      <label>Авто <input name="car_id" list="cars-list" required></label>
+      <label>Заявка <input name="request_id" placeholder="ID заявки"></label>
+      <label>Мастер <select name="employee_id"><option value="">Без мастера</option>{% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}</select></label>
+      <label>Вид работы <input name="work_type" required></label>
+      <label>Проблема <textarea name="problem_description" required></textarea></label>
+      <label>Комментарий <textarea name="service_comment"></textarea></label>
+      <label>Стоимость работ <input type="number" step="0.01" min="0" name="work_cost"></label>
+      <label>Прибыль мастера <input type="number" step="0.01" min="0" name="master_profit"></label>
+      <button class="btn" type="submit">Создать</button>
+      <button class="btn" type="button" id="create-modal-close">Закрыть</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

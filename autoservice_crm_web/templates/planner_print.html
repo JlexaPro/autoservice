@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>План на {{ day }}</title>
+  <style>
+    body{font-family:Arial,sans-serif;color:#111;margin:18px}
+    h1{margin:0 0 12px 0}
+    table{width:100%;border-collapse:collapse}
+    th,td{border:1px solid #bbb;padding:6px 8px;font-size:13px;vertical-align:top}
+    th{background:#eee}
+    .muted{color:#555}
+    @media print {.noprint{display:none}}
+  </style>
+</head>
+<body>
+  <div class="noprint"><button onclick="window.print()">Печать</button></div>
+  <h1>План сервиса на {{ day }}</h1>
+  <table>
+    <tr><th>Время</th><th>Пост</th><th>Клиент</th><th>Авто</th><th>Проблема</th><th>Мастер</th><th>Статус</th></tr>
+    {% for v,c,car,e,b in rows %}
+      <tr>
+        <td>{{ v.planned_start_at.strftime('%H:%M') if v.planned_start_at else '' }}–{{ v.planned_end_at.strftime('%H:%M') if v.planned_end_at else '' }}</td>
+        <td>{{ b.bay_name if b else '' }}</td>
+        <td>{{ c.full_name }}</td>
+        <td>{{ car.brand }} {{ car.model }} {{ car.plate_number }}</td>
+        <td>{{ v.problem_description }}</td>
+        <td>{{ e.full_name if e else (v.assigned_employee_number or '') }}</td>
+        <td>{{ v.visit_status }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+</body>
+</html>

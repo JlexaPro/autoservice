@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Визит #{{ visit.visit_id }}</h1>
+<p><b>Клиент:</b> {{ client.full_name }}</p>
+<p><b>Авто:</b> {{ car.brand }} {{ car.model }} {{ car.plate_number }}</p>
+<p><b>Пост:</b> {{ bay.bay_name if bay else '' }}</p>
+<p><b>Мастер:</b> {{ employee.full_name if employee else '' }}</p>
+<p><b>Время:</b> {{ visit.planned_start_at }} — {{ visit.planned_end_at }}</p>
+<p><b>Вид работы:</b> {{ visit.work_type }}</p>
+<p><b>Проблема:</b> {{ visit.problem_description }}</p>
+<p><b>Стоимость:</b> {{ visit.work_cost or 0 }} ₽ | <b>Прибыль мастера:</b> {{ visit.master_profit or 0 }} ₽</p>
+{% if work_order %}
+<p><a class="btn" href="/work-orders/{{ work_order.work_order_id }}">Открыть заказ-наряд</a></p>
+{% else %}
+<form method="post" action="/visits/{{ visit.visit_id }}/work-order">
+  <button class="btn">Создать заказ-наряд</button>
+</form>
+{% endif %}
+{% endblock %}
