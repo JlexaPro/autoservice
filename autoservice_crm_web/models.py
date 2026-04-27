@@ -280,6 +280,17 @@ class PromotionContact(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class SMSTemplate(Base):
+    __tablename__ = "sms_templates"
+    __table_args__ = {"schema": "app"}
+    template_id = Column(BigInteger, primary_key=True)
+    template_key = Column(Text, nullable=False, unique=True)
+    title = Column(Text, nullable=False)
+    body = Column(Text, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class WorkOrder(Base):
     __tablename__ = "work_orders"
     __table_args__ = {"schema": "app"}

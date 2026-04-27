@@ -29,6 +29,7 @@ from models import (
     ServiceRequest,
     ServiceSlot,
     ServiceVisit,
+    SMSTemplate,
     WorkOrder,
     WorkOrderItem,
     WorkOrderPart,
@@ -38,6 +39,7 @@ from schemas import IncomingRequestSchema
 from services import (
     change_request_status,
     create_request_with_relations,
+    format_phone_ru,
     normalize_phone,
     scenario_not_reached,
     update_client_comment,
@@ -60,10 +62,16 @@ def startup_migrations():
         "ALTER TABLE app.employees ADD COLUMN IF NOT EXISTS birth_date date",
         "ALTER TABLE app.employees ADD COLUMN IF NOT EXISTS hourly_rate numeric(12,2)",
         "ALTER TABLE app.employees ADD COLUMN IF NOT EXISTS comments text",
+        "CREATE TABLE IF NOT EXISTS app.sms_templates (template_id bigserial PRIMARY KEY, template_key text UNIQUE NOT NULL, title text NOT NULL, body text NOT NULL, is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now())",
     ]
     with engine.begin() as conn:
         for stmt in stmts:
             conn.execute(text(stmt))
+        conn.execute(text("""
+            INSERT INTO app.sms_templates(template_key, title, body)
+            VALUES ('to_reminder','Напомнить о ТО','{ФИО}, здравствуйте! Это автосервис. Вы были у нас на ТО {LAST_TO_DATE}. Пора повторить ТО. Даем скидку 10% при записи до {DISCOUNT_DEADLINE}.')
+            ON CONFLICT (template_key) DO NOTHING
+        """))
 
 
 def get_setting(db: Session, key: str, default: str) -> str:
@@ -105,7 +113,7 @@ def normalize_dt_for_planner(dt: datetime | None) -> datetime | None:
 
 
 @app.get("/")
-def dashboard(request: Request, db: Session = Depends(get_db)):
+def dashboard(request: Request, month_shift: int = 0, db: Session = Depends(get_db)):
     today = date.today()
     tomorrow = today + timedelta(days=1)
     week_ago = today - timedelta(days=7)
@@ -124,6 +132,17 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     conversion_today = (booked_today / requests_today_count * 100) if requests_today_count else 0
     bays_cnt = db.scalar(select(func.count()).select_from(ServiceBay).where(ServiceBay.is_active.is_(True))) or 1
     load_pct_today = min(100.0, (booked_today / max(1, bays_cnt * 10)) * 100)
+    month_anchor = (today.replace(day=1) + timedelta(days=month_shift * 31)).replace(day=1)
+    if month_anchor.month == 12:
+        month_end = month_anchor.replace(year=month_anchor.year + 1, month=1, day=1) - timedelta(days=1)
+    else:
+        month_end = month_anchor.replace(month=month_anchor.month + 1, day=1) - timedelta(days=1)
+    monthly_load = []
+    d = month_anchor
+    while d <= month_end:
+        day_visits = db.scalar(select(func.count()).select_from(ServiceVisit).where(cast(ServiceVisit.planned_start_at, Date) == d)) or 0
+        monthly_load.append({"day": d.day, "load_pct": min(100.0, (day_visits / max(1, bays_cnt * 10)) * 100)})
+        d += timedelta(days=1)
 
     overdue_items = db.execute(
         select(Followup, Client).join(Client, Client.client_id == Followup.client_id).where(Followup.task_status == "Открыто", Followup.due_date < today).order_by(Followup.due_date.asc()).limit(10)
@@ -144,7 +163,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "avg_check_today": avg_check_today,
         "conversion_today": conversion_today,
         "load_pct_today": load_pct_today,
-    }, "overdue_items": overdue_items, "visits_today": visits_today})
+    }, "overdue_items": overdue_items, "visits_today": visits_today, "monthly_load": monthly_load, "month_anchor": month_anchor, "month_shift": month_shift})
 
 
 @app.get("/requests")
@@ -188,7 +207,7 @@ def request_new(
 ):
     payload = {
         "full_name": full_name,
-        "phone_raw": phone_raw,
+        "phone_raw": format_phone_ru(phone_raw),
         "car_brand": car_brand,
         "car_model": car_model,
         "car_plate": car_plate,
@@ -277,13 +296,14 @@ def client_new(
     db: Session = Depends(get_db),
 ):
     phone_n = normalize_phone(phone_raw)
+    phone_fmt = format_phone_ru(phone_raw)
     with db.begin():
         exists = db.execute(select(Client).where(Client.phone_normalized == phone_n, func.lower(func.trim(Client.full_name)) == full_name.strip().lower())).scalar_one_or_none()
         if exists:
             return RedirectResponse(f"/clients/{exists.client_id}", status_code=303)
         client = Client(
             full_name=full_name.strip(),
-            phone_raw=phone_raw.strip(),
+            phone_raw=phone_fmt,
             phone_normalized=phone_n,
             email=none_if_empty(email.strip()),
             client_tone=client_tone,
@@ -660,7 +680,8 @@ def followups_page(request: Request, only_open: bool = True, only_overdue: bool 
     if only_overdue:
         q = q.where(Followup.due_date < date.today(), Followup.task_status == "Открыто")
     rows = db.execute(q.order_by(Followup.due_date.asc()).limit(300)).all()
-    return templates.TemplateResponse("followups.html", {"request": request, "rows": rows, "today": date.today()})
+    sms_templates = db.execute(select(SMSTemplate).where(SMSTemplate.is_active.is_(True)).order_by(SMSTemplate.title)).scalars().all()
+    return templates.TemplateResponse("followups.html", {"request": request, "rows": rows, "today": date.today(), "sms_templates": sms_templates})
 
 
 @app.get("/followups/new")
@@ -672,7 +693,7 @@ def followup_new_form(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/followups/new")
 def followup_new(
-    client_id: int = Form(...),
+    client_id: str = Form(...),
     car_id: str = Form(default=""),
     task_type: str = Form(...),
     due_date: date = Form(...),
@@ -681,6 +702,7 @@ def followup_new(
     preferred_contact_slot: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
+    client_id = int(str(client_id).split("|")[0].strip())
     with db.begin():
         f = Followup(
             client_id=client_id,
@@ -694,6 +716,20 @@ def followup_new(
         )
         db.add(f)
     return RedirectResponse("/followups", status_code=303)
+
+
+@app.get("/followups/{followup_id}/sms-preview")
+def followup_sms_preview(followup_id: int, template_key: str, db: Session = Depends(get_db)):
+    f = db.get(Followup, followup_id)
+    if not f:
+        return {"ok": False, "error": "Напоминание не найдено"}
+    template = db.execute(select(SMSTemplate).where(SMSTemplate.template_key == template_key)).scalar_one_or_none()
+    if not template:
+        return {"ok": False, "error": "Шаблон не найден"}
+    client = db.get(Client, f.client_id)
+    last_to_date = (date.today() - timedelta(days=180)).strftime("%d.%m.%Y")
+    msg = template.body.replace("{ФИО}", client.full_name if client else "Клиент").replace("{LAST_TO_DATE}", last_to_date).replace("{DISCOUNT_DEADLINE}", (date.today() + timedelta(days=7)).strftime("%d.%m.%Y"))
+    return {"ok": True, "phone": client.phone_raw if client else "", "message": msg}
 
 @app.post("/followups/{followup_id}/done")
 def followup_done(followup_id: int, db: Session = Depends(get_db)):
@@ -1080,6 +1116,7 @@ def update_work_hours(
 def api_incoming_request(payload: IncomingRequestSchema, db: Session = Depends(get_db)):
     data = payload.model_dump()
     data["phone_raw"] = data.pop("phone")
+    data["phone_raw"] = format_phone_ru(data["phone_raw"])
     data["personal_data_consent"] = True
     data["source_system"] = data.get("source_system") or "web_form"
     with db.begin():

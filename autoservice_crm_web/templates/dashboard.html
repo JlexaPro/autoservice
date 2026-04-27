@@ -19,4 +19,11 @@
 <table><tr><th>Дата</th><th>Клиент</th><th>Задача</th></tr>{% for f,c in overdue_items %}<tr><td>{{ f.due_date }}</td><td><a href="/clients/{{ c.client_id }}">{{ c.full_name }}</a></td><td>{{ f.title }}</td></tr>{% endfor %}</table>
 <h2>Записи на сегодня</h2>
 <table><tr><th>Время</th><th>Клиент</th><th>Авто</th><th>Статус</th></tr>{% for v,c,car in visits_today %}<tr><td>{{ v.planned_start_at }}</td><td>{{ c.full_name }}</td><td>{{ car.brand }} {{ car.model }} {{ car.plate_number }}</td><td>{{ v.visit_status }}</td></tr>{% endfor %}</table>
+<h2>График загрузки сервиса за месяц</h2>
+<p><a class="btn" href="/?month_shift={{ month_shift - 1 }}">← Предыдущий месяц</a> <b>{{ month_anchor.strftime('%m.%Y') }}</b> <a class="btn" href="/?month_shift={{ month_shift + 1 }}">Следующий месяц →</a></p>
+<div class="load-chart">
+  {% for p in monthly_load %}
+    <div class="bar-wrap"><div class="bar" style="height: {{ p.load_pct }}%"></div><span>{{ p.day }}</span></div>
+  {% endfor %}
+</div>
 {% endblock %}

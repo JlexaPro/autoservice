@@ -6,8 +6,25 @@
 {% for f,c,car in rows %}
 <tr {% if f.task_status=='Открыто' and f.due_date < today %}class="overdue"{% endif %}>
   <td>{{ f.due_date }}</td><td>{{ f.task_status }}</td><td><a href="/clients/{{ c.client_id }}">{{ c.full_name }}</a></td><td>{{ c.phone_raw }}</td><td>{% if car %}{{ car.brand }} {{ car.model }}{% endif %}</td><td>{{ f.title }}</td>
-  <td>{% if f.task_status == 'Открыто' %}<form method="post" action="/followups/{{ f.followup_id }}/done"><button class="btn">Выполнить</button></form>{% endif %}</td>
+  <td>
+    {% if f.task_status == 'Открыто' %}<form method="post" action="/followups/{{ f.followup_id }}/done"><button class="btn">Выполнить</button></form>{% endif %}
+    <p><a class="btn" href="tel:{{ c.phone_normalized }}">Позвонить</a></p>
+    <select id="sms-template-{{ f.followup_id }}">{% for t in sms_templates %}<option value="{{ t.template_key }}">{{ t.title }}</option>{% endfor %}</select>
+    <button class="btn sms-preview-btn" data-followup-id="{{ f.followup_id }}">Отправить СМС-сообщение</button>
+  </td>
 </tr>
 {% endfor %}
 </table>
+<script>
+document.querySelectorAll('.sms-preview-btn').forEach(btn=>{
+  btn.addEventListener('click', async ()=>{
+    const id = btn.dataset.followupId;
+    const key = document.getElementById('sms-template-'+id).value;
+    const res = await fetch(`/followups/${id}/sms-preview?template_key=${key}`);
+    const data = await res.json();
+    if(!data.ok){ alert(data.error || 'Ошибка'); return; }
+    alert(`Номер: ${data.phone}\\n\\n${data.message}`);
+  });
+});
+</script>
 {% endblock %}

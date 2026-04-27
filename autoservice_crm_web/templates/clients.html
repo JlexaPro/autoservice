@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 <h1>Клиенты</h1>
+<p><a class="btn" href="/clients/new">+ Добавить клиента</a></p>
 <table>
 <tr><th>ID</th><th>ФИО</th><th>Телефон</th><th>Метка</th><th>Email</th><th>Комментарий</th></tr>
 {% for c in clients %}

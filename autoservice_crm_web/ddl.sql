@@ -267,6 +267,15 @@ CREATE TABLE IF NOT EXISTS app.promotion_contacts (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS app.sms_templates (
+    template_id bigserial PRIMARY KEY,
+    template_key text NOT NULL UNIQUE,
+    title text NOT NULL,
+    body text NOT NULL,
+    is_active boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS app.work_orders (
     work_order_id bigserial PRIMARY KEY,
     order_number text NOT NULL UNIQUE,

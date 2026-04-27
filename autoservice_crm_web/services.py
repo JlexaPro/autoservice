@@ -31,6 +31,13 @@ def normalize_phone(phone_raw: str) -> str:
     return digits
 
 
+def format_phone_ru(phone_raw: str) -> str:
+    digits = normalize_phone(phone_raw)
+    if len(digits) != 11:
+        return phone_raw.strip()
+    return f"8-{digits[1:4]}-{digits[4:7]}-{digits[7:9]}-{digits[9:11]}"
+
+
 def normalize_name(full_name: str) -> str:
     return " ".join((full_name or "").strip().lower().split())
 
