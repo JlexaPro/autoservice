@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Сотрудники</h1>
+<form method="post" action="/employees/new" class="form-grid">
+  <h3>Добавить сотрудника</h3>
+  <label>Табельный номер <input name="employee_number" required></label>
+  <label>ФИО <input name="full_name" required></label>
+  <label>Роль <input name="role" required></label>
+  <label>Телефон <input name="phone"></label>
+  <label>Дата рождения <input type="date" name="birth_date"></label>
+  <label>Часовая ставка <input type="number" step="0.01" name="hourly_rate"></label>
+  <label>Специализация <input name="specialization"></label>
+  <label>Комментарий <textarea name="comments"></textarea></label>
+  <button class="btn">Сохранить</button>
+</form>
+<table><tr><th>Табельный номер</th><th>ФИО</th><th>Роль</th><th>Специализация</th><th>Активность</th></tr>
+{% for e in rows %}<tr><td>{{ e.employee_number }}</td><td><a href="/employees/{{ e.employee_id }}">{{ e.full_name }}</a></td><td>{{ e.role }}</td><td>{{ e.specialization or '' }}</td><td>{{ 'Да' if e.is_active else 'Нет' }}</td></tr>{% endfor %}
+</table>
+{% endblock %}
