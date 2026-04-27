@@ -17,7 +17,15 @@
   <div class="card">Оплачено за период: <b>{{ '%.2f'|format(paid_total) }} ₽</b></div>
   <div class="card">Долг по закрытым ЗН: <b>{{ '%.2f'|format(debt_total) }} ₽</b></div>
   <div class="card">Закрытых заказ-нарядов: <b>{{ closed_orders_count }}</b></div>
+  <div class="card">Визитов за период: <b>{{ visits_count }}</b></div>
+  <div class="card">Выручка по визитам: <b>{{ '%.2f'|format(visits_revenue) }} ₽</b></div>
+  <div class="card">Прибыль мастеров (визиты): <b>{{ '%.2f'|format(visits_master_profit) }} ₽</b></div>
+  <div class="card">Прибыль сервиса (визиты): <b>{{ '%.2f'|format(visits_service_profit) }} ₽</b></div>
 </div>
+
+{% if closed_orders_count == 0 and visits_count > 0 %}
+<div class="warn">За выбранный период нет закрытых заказ-нарядов. Финансовые карточки по ЗН будут нулевыми, но данные по визитам показаны выше.</div>
+{% endif %}
 
 <h3>ТОП работ (закрытые заказ-наряды)</h3>
 <table><tr><th>Работа</th><th>Выручка</th></tr>

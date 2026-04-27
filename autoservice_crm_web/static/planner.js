@@ -232,6 +232,19 @@
       }
     });
   });
+  board.querySelectorAll('.bay-col').forEach((bayCol) => {
+    const ranges = [...bayCol.querySelectorAll('.visit-card')].map((card) => {
+      const top = roundToStep(parseInt(card.style.top || '0', 10) / 2);
+      const end = roundToStep((parseInt(card.style.top || '0', 10) + parseInt(card.style.height || '0', 10)) / 2);
+      return { top, end };
+    });
+    bayCol.querySelectorAll('.free-slot-btn').forEach((btn) => {
+      const slotTop = roundToStep(parseInt(btn.style.top || '0', 10) / 2);
+      const slotEnd = slotTop + stepMin;
+      const busy = ranges.some((r) => slotTop < r.end && slotEnd > r.top);
+      if (busy) btn.classList.add('slot-hidden');
+    });
+  });
 
   document.querySelectorAll('.quick-work').forEach(btn=>{
     btn.addEventListener('click', ()=>{

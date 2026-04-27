@@ -1193,6 +1193,16 @@ def finance_page(request: Request, start_date: date | None = None, end_date: dat
     today = date.today()
     start_date = start_date or today.replace(day=1)
     end_date = end_date or today
+    visits = db.execute(
+        select(ServiceVisit).where(
+            cast(ServiceVisit.planned_start_at, Date) >= start_date,
+            cast(ServiceVisit.planned_start_at, Date) <= end_date,
+        )
+    ).scalars().all()
+    visits_count = len(visits)
+    visits_revenue = sum(float(v.work_cost or 0) for v in visits)
+    visits_master_profit = sum(float(v.master_profit or 0) for v in visits)
+    visits_service_profit = visits_revenue - visits_master_profit
     closed_orders = db.execute(
         select(WorkOrder).where(
             WorkOrder.status == "Закрыт",
@@ -1258,6 +1268,10 @@ def finance_page(request: Request, start_date: date | None = None, end_date: dat
         "paid_total": paid_total,
         "debt_total": debt_total,
         "closed_orders_count": len(closed_orders),
+        "visits_count": visits_count,
+        "visits_revenue": visits_revenue,
+        "visits_master_profit": visits_master_profit,
+        "visits_service_profit": visits_service_profit,
         "closed_orders": closed_orders,
         "orders_by_id": orders_by_id,
         "top_works": top_work_rows,
