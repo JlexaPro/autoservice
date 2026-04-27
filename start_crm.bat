@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal EnableExtensions EnableDelayedExpansion
 
 echo ===============================================
-echo Запуск Autoservice CRM
+echo Автонастройка и запуск Autoservice CRM
 echo ===============================================
 
 set "ROOT_DIR=%~dp0"
@@ -17,41 +17,53 @@ if not exist "%APP_DIR%\app.py" (
 
 cd /d "%APP_DIR%"
 
+if not exist ".env" (
+  if exist ".env.example" (
+    copy /Y ".env.example" ".env" >nul
+    echo [INFO] Создан .env из .env.example
+  ) else (
+    echo [ERROR] Не найден .env.example
+    goto :fail
+  )
+)
+
 if not exist ".venv\Scripts\python.exe" (
-  echo [ERROR] Виртуальное окружение .venv не найдено.
-  echo Создайте его: python -m venv .venv
-  pause
-  exit /b 1
+  echo [1/8] Создание виртуального окружения...
+  python -m venv .venv
+  if errorlevel 1 (
+    echo [ERROR] Не удалось создать .venv. Проверьте установку Python.
+    goto :fail
+  )
 )
 
 call ".venv\Scripts\activate.bat"
 if errorlevel 1 (
   echo [ERROR] Не удалось активировать .venv
-  pause
-  exit /b 1
+  goto :fail
 )
 
-echo [1/6] Проверка зависимостей...
+echo [2/8] Установка зависимостей...
+python -m pip install --disable-pip-version-check -r requirements.txt
+if errorlevel 1 (
+  echo [ERROR] Не удалось установить зависимости.
+  goto :fail
+)
+
+echo [3/8] Проверка библиотек...
 python -c "import fastapi,uvicorn,sqlalchemy,psycopg2,openpyxl,reportlab,jinja2" 1>nul 2>nul
 if errorlevel 1 (
-  echo [INFO] Устанавливаю зависимости из requirements.txt...
-  python -m pip install --disable-pip-version-check -r requirements.txt
-  if errorlevel 1 (
-    echo [ERROR] Не удалось установить зависимости.
-    pause
-    exit /b 1
-  )
+  echo [ERROR] После установки зависимостей не удалось импортировать библиотеки.
+  goto :fail
 )
 
-echo [2/6] Проверка подключения к БД и структуры app...
-python check_app.py
+echo [4/8] Автоподготовка БД (DDL + patch + проверка)...
+python setup_local.py
 if errorlevel 1 (
-  echo [ERROR] Проверка приложения не пройдена. Исправьте ошибки выше.
-  pause
-  exit /b 1
+  echo [ERROR] Автоподготовка БД не пройдена.
+  goto :fail
 )
 
-echo [3/6] Проверка свободного порта 8000...
+echo [5/8] Проверка свободного порта 8000...
 set "PIDS="
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":8000 .*LISTENING"') do (
   set "PIDS=!PIDS! %%P"
@@ -65,10 +77,10 @@ if defined PIDS (
   timeout /t 1 >nul
 )
 
-echo [4/6] Запуск Uvicorn...
-echo [5/6] Приложение доступно по адресу:
+echo [6/8] Запуск Uvicorn...
+echo [7/8] Приложение доступно по адресу:
 echo      http://127.0.0.1:8000
-echo [6/6] Для остановки нажмите Ctrl+C
+echo [8/8] Для остановки нажмите Ctrl+C
 
 python -m uvicorn app:app --host 127.0.0.1 --port 8000
 set "EXIT_CODE=%ERRORLEVEL%"
@@ -76,3 +88,9 @@ set "EXIT_CODE=%ERRORLEVEL%"
 echo Uvicorn завершил работу с кодом %EXIT_CODE%
 pause
 exit /b %EXIT_CODE%
+
+:fail
+echo.
+echo Нажмите любую клавишу, чтобы закрыть окно...
+pause >nul
+exit /b 1

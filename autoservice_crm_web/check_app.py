@@ -27,7 +27,7 @@ REQUIRED_COLUMNS = {
     "service_visits": {"visit_id", "request_id", "client_id", "car_id", "visit_status", "service_bay_id"},
     "followups": {"followup_id", "request_id", "task_type", "task_status", "due_date"},
     "work_orders": {"work_order_id", "order_number", "client_id", "car_id", "status", "total_amount"},
-    "employees": {"employee_id", "employee_number", "full_name", "role_name", "is_active"},
+    "employees": {"employee_id", "employee_number", "full_name", "role", "is_active"},
     "service_bays": {"service_bay_id", "bay_name", "is_active"},
     "service_slots": {"slot_id", "visit_id", "slot_date", "start_time", "end_time", "slot_status"},
 }
