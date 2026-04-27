@@ -121,6 +121,21 @@ start_crm.bat
 http://127.0.0.1:8000
 ```
 
+### Публичный тест-доступ (для входа с другого компьютера в сети)
+
+Если нужно дать доступ папе/коллеге по IP сервера, используйте:
+
+```bat
+start_crm_public.bat
+```
+
+Что делает этот скрипт дополнительно:
+- запускает Uvicorn на `0.0.0.0`;
+- проверяет и создаёт правило Windows Firewall для TCP `8000`;
+- печатает ссылку вида `http://<IP_сервера>:8000`.
+
+> Важно: это режим для теста. Для постоянной публикации в интернет лучше ставить reverse proxy + HTTPS.
+
 ---
 
 ## 7) Backup базы
@@ -235,6 +250,7 @@ python check_app.py
 python check_schema.py
 python smoke_test_transactions.py
 start_crm.bat
+start_crm_public.bat
 backup_db.bat
 restore_db.bat
 ```
