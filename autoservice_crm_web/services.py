@@ -66,7 +66,7 @@ def get_or_create_client(db: Session, full_name: str, phone_raw: str, email: str
 
     client = Client(
         full_name=full_name.strip(),
-        phone_raw=phone_raw.strip(),
+        phone_raw=format_phone_ru(phone_raw),
         phone_normalized=phone_n,
         email=email,
         client_tone="Новый",
@@ -120,7 +120,7 @@ def create_request_with_relations(db: Session, payload: dict, created_by: str = 
         source_system=payload.get("source_system", "manual"),
         external_request_id=payload.get("external_request_id"),
         full_name=payload["full_name"],
-        phone_raw=payload["phone_raw"],
+        phone_raw=format_phone_ru(payload["phone_raw"]),
         phone_normalized=normalize_phone(payload["phone_raw"]),
         email=payload.get("email"),
         car_brand=payload["car_brand"],

@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 <h1>{{ client.full_name }}</h1>
-<p>{{ client.phone_raw }} | {{ client.email or '' }}</p>
+<p>{{ client.phone_raw|phone_ru }} | {{ client.email or '' }}</p>
 <h3>Комментарий по клиенту</h3>
 <form method="post" action="/clients/{{ client.client_id }}/comment" class="form-grid">
   <label>Метка

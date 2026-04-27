@@ -3,7 +3,7 @@ from io import BytesIO
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import Date, and_, cast, func, or_, select, text
@@ -49,6 +49,7 @@ BASE_DIR = Path(__file__).parent
 app = FastAPI(title="Autoservice CRM")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+templates.env.filters["phone_ru"] = format_phone_ru
 
 DEFAULT_WORK_START = "09:00"
 DEFAULT_WORK_END = "19:00"
@@ -71,6 +72,58 @@ def startup_migrations():
             INSERT INTO app.sms_templates(template_key, title, body)
             VALUES ('to_reminder','Напомнить о ТО','{ФИО}, здравствуйте! Это автосервис. Вы были у нас на ТО {LAST_TO_DATE}. Пора повторить ТО. Даем скидку 10% при записи до {DISCOUNT_DEADLINE}.')
             ON CONFLICT (template_key) DO NOTHING
+        """))
+        conn.execute(text("""
+            WITH c AS (
+                SELECT client_id,
+                       regexp_replace(coalesce(phone_raw, ''), '\\D', '', 'g') AS digits
+                FROM app.clients
+            ),
+            n AS (
+                SELECT client_id,
+                       CASE
+                         WHEN length(digits) = 11 AND left(digits, 1) = '8' THEN '7' || substr(digits, 2)
+                         WHEN length(digits) = 10 THEN '7' || digits
+                         WHEN length(digits) = 11 AND left(digits, 1) = '7' THEN digits
+                         ELSE digits
+                       END AS normalized
+                FROM c
+            )
+            UPDATE app.clients cl
+               SET phone_normalized = n.normalized,
+                   phone_raw = CASE
+                       WHEN length(n.normalized) = 11
+                           THEN '8-' || substr(n.normalized, 2, 3) || '-' || substr(n.normalized, 5, 3) || '-' || substr(n.normalized, 8, 2) || '-' || substr(n.normalized, 10, 2)
+                       ELSE trim(coalesce(cl.phone_raw, ''))
+                   END
+            FROM n
+            WHERE cl.client_id = n.client_id
+        """))
+        conn.execute(text("""
+            WITH r AS (
+                SELECT request_id,
+                       regexp_replace(coalesce(phone_raw, ''), '\\D', '', 'g') AS digits
+                FROM app.service_requests
+            ),
+            n AS (
+                SELECT request_id,
+                       CASE
+                         WHEN length(digits) = 11 AND left(digits, 1) = '8' THEN '7' || substr(digits, 2)
+                         WHEN length(digits) = 10 THEN '7' || digits
+                         WHEN length(digits) = 11 AND left(digits, 1) = '7' THEN digits
+                         ELSE digits
+                       END AS normalized
+                FROM r
+            )
+            UPDATE app.service_requests sr
+               SET phone_normalized = n.normalized,
+                   phone_raw = CASE
+                       WHEN length(n.normalized) = 11
+                           THEN '8-' || substr(n.normalized, 2, 3) || '-' || substr(n.normalized, 5, 3) || '-' || substr(n.normalized, 8, 2) || '-' || substr(n.normalized, 10, 2)
+                       ELSE trim(coalesce(sr.phone_raw, ''))
+                   END
+            FROM n
+            WHERE sr.request_id = n.request_id
         """))
 
 
@@ -112,6 +165,30 @@ def normalize_dt_for_planner(dt: datetime | None) -> datetime | None:
     return dt
 
 
+def month_bounds(month_shift: int) -> tuple[date, date]:
+    today = date.today()
+    month_anchor = (today.replace(day=1) + timedelta(days=month_shift * 31)).replace(day=1)
+    if month_anchor.month == 12:
+        month_end = month_anchor.replace(year=month_anchor.year + 1, month=1, day=1) - timedelta(days=1)
+    else:
+        month_end = month_anchor.replace(month=month_anchor.month + 1, day=1) - timedelta(days=1)
+    return month_anchor, month_end
+
+
+def build_monthly_load(db: Session, month_shift: int) -> tuple[date, list[dict[str, float | int]]]:
+    bays_cnt = db.scalar(select(func.count()).select_from(ServiceBay).where(ServiceBay.is_active.is_(True))) or 1
+    month_anchor, month_end = month_bounds(month_shift)
+    monthly_load: list[dict[str, float | int]] = []
+    current = month_anchor
+    while current <= month_end:
+        day_visits = db.scalar(
+            select(func.count()).select_from(ServiceVisit).where(cast(ServiceVisit.planned_start_at, Date) == current)
+        ) or 0
+        monthly_load.append({"day": current.day, "load_pct": min(100.0, (day_visits / max(1, bays_cnt * 10)) * 100)})
+        current += timedelta(days=1)
+    return month_anchor, monthly_load
+
+
 @app.get("/")
 def dashboard(request: Request, month_shift: int = 0, db: Session = Depends(get_db)):
     today = date.today()
@@ -132,17 +209,7 @@ def dashboard(request: Request, month_shift: int = 0, db: Session = Depends(get_
     conversion_today = (booked_today / requests_today_count * 100) if requests_today_count else 0
     bays_cnt = db.scalar(select(func.count()).select_from(ServiceBay).where(ServiceBay.is_active.is_(True))) or 1
     load_pct_today = min(100.0, (booked_today / max(1, bays_cnt * 10)) * 100)
-    month_anchor = (today.replace(day=1) + timedelta(days=month_shift * 31)).replace(day=1)
-    if month_anchor.month == 12:
-        month_end = month_anchor.replace(year=month_anchor.year + 1, month=1, day=1) - timedelta(days=1)
-    else:
-        month_end = month_anchor.replace(month=month_anchor.month + 1, day=1) - timedelta(days=1)
-    monthly_load = []
-    d = month_anchor
-    while d <= month_end:
-        day_visits = db.scalar(select(func.count()).select_from(ServiceVisit).where(cast(ServiceVisit.planned_start_at, Date) == d)) or 0
-        monthly_load.append({"day": d.day, "load_pct": min(100.0, (day_visits / max(1, bays_cnt * 10)) * 100)})
-        d += timedelta(days=1)
+    month_anchor, monthly_load = build_monthly_load(db, month_shift)
 
     overdue_items = db.execute(
         select(Followup, Client).join(Client, Client.client_id == Followup.client_id).where(Followup.task_status == "Открыто", Followup.due_date < today).order_by(Followup.due_date.asc()).limit(10)
@@ -164,6 +231,56 @@ def dashboard(request: Request, month_shift: int = 0, db: Session = Depends(get_
         "conversion_today": conversion_today,
         "load_pct_today": load_pct_today,
     }, "overdue_items": overdue_items, "visits_today": visits_today, "monthly_load": monthly_load, "month_anchor": month_anchor, "month_shift": month_shift})
+
+
+@app.get("/dashboard/monthly-load.svg")
+def dashboard_monthly_load_svg(month_shift: int = 0, db: Session = Depends(get_db)):
+    month_anchor, monthly_load = build_monthly_load(db, month_shift)
+    width = 1120
+    height = 320
+    left_pad = 48
+    right_pad = 24
+    top_pad = 24
+    bottom_pad = 54
+    plot_h = height - top_pad - bottom_pad
+    bars = len(monthly_load) or 1
+    slot = (width - left_pad - right_pad) / bars
+    bar_w = max(8, slot * 0.62)
+    grid = []
+    for tick in (0, 25, 50, 75, 100):
+        y = top_pad + plot_h - (plot_h * tick / 100)
+        grid.append(f'<line x1="{left_pad}" y1="{y:.1f}" x2="{width-right_pad}" y2="{y:.1f}" stroke="#dbeafe" stroke-width="1" />')
+        grid.append(f'<text x="{left_pad-8}" y="{y+4:.1f}" font-size="11" text-anchor="end" fill="#64748b">{tick}%</text>')
+    rects = []
+    labels = []
+    for i, point in enumerate(monthly_load):
+        x = left_pad + i * slot + (slot - bar_w) / 2
+        bar_h = plot_h * (point["load_pct"] / 100)
+        y = top_pad + plot_h - bar_h
+        rects.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(1.0, bar_h):.1f}" rx="4" fill="url(#barGrad)"><title>День {int(point["day"])}: {point["load_pct"]:.1f}%</title></rect>'
+        )
+        if int(point["day"]) in {1, 5, 10, 15, 20, 25, 30, 31}:
+            labels.append(f'<text x="{x + bar_w/2:.1f}" y="{height-28}" font-size="11" text-anchor="middle" fill="#475569">{int(point["day"])}</text>')
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+<defs>
+  <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#f8fafc" />
+    <stop offset="100%" stop-color="#eef2ff" />
+  </linearGradient>
+  <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#60a5fa" />
+    <stop offset="100%" stop-color="#2563eb" />
+  </linearGradient>
+</defs>
+<rect x="0" y="0" width="{width}" height="{height}" fill="url(#bgGrad)" />
+<text x="{left_pad}" y="16" font-size="13" fill="#0f172a">Загрузка сервиса — {month_anchor.strftime("%m.%Y")}</text>
+{''.join(grid)}
+{''.join(rects)}
+<line x1="{left_pad}" y1="{height-bottom_pad}" x2="{width-right_pad}" y2="{height-bottom_pad}" stroke="#94a3b8" stroke-width="1.2" />
+{''.join(labels)}
+</svg>"""
+    return Response(content=svg, media_type="image/svg+xml")
 
 
 @app.get("/requests")
@@ -703,18 +820,18 @@ def followup_new(
     db: Session = Depends(get_db),
 ):
     client_id = int(str(client_id).split("|")[0].strip())
-    with db.begin():
-        f = Followup(
-            client_id=client_id,
-            car_id=int(car_id) if none_if_empty(car_id) else None,
-            task_type=task_type.strip(),
-            due_date=due_date,
-            title=title.strip(),
-            description=none_if_empty(description.strip()),
-            preferred_contact_slot=none_if_empty(preferred_contact_slot.strip()),
-            task_status="Открыто",
-        )
-        db.add(f)
+    f = Followup(
+        client_id=client_id,
+        car_id=int(car_id) if none_if_empty(car_id) else None,
+        task_type=task_type.strip(),
+        due_date=due_date,
+        title=title.strip(),
+        description=none_if_empty(description.strip()),
+        preferred_contact_slot=none_if_empty(preferred_contact_slot.strip()),
+        task_status="Открыто",
+    )
+    db.add(f)
+    db.commit()
     return RedirectResponse("/followups", status_code=303)
 
 
@@ -729,16 +846,16 @@ def followup_sms_preview(followup_id: int, template_key: str, db: Session = Depe
     client = db.get(Client, f.client_id)
     last_to_date = (date.today() - timedelta(days=180)).strftime("%d.%m.%Y")
     msg = template.body.replace("{ФИО}", client.full_name if client else "Клиент").replace("{LAST_TO_DATE}", last_to_date).replace("{DISCOUNT_DEADLINE}", (date.today() + timedelta(days=7)).strftime("%d.%m.%Y"))
-    return {"ok": True, "phone": client.phone_raw if client else "", "message": msg}
+    return {"ok": True, "phone": format_phone_ru(client.phone_raw) if client else "", "message": msg}
 
 @app.post("/followups/{followup_id}/done")
 def followup_done(followup_id: int, db: Session = Depends(get_db)):
     f = db.get(Followup, followup_id)
     if not f:
         raise HTTPException(404, "Напоминание не найдено")
-    with db.begin():
-        f.task_status = "Выполнено"
-        f.completed_at = datetime.utcnow()
+    f.task_status = "Выполнено"
+    f.completed_at = datetime.utcnow()
+    db.commit()
     return RedirectResponse("/followups", status_code=303)
 
 

@@ -6,7 +6,7 @@
 <tr><th>ID</th><th>Создана</th><th>Статус</th><th>Клиент</th><th>Телефон</th><th>Авто</th><th>Госномер</th><th>Проблема</th><th>Действия</th></tr>
 {% for r in rows %}
 <tr>
-  <td>{{ r.request_id }}</td><td>{{ r.source_created_at }}</td><td>{{ r.request_status }}</td><td>{{ r.full_name }}</td><td>{{ r.phone_raw }}</td>
+  <td>{{ r.request_id }}</td><td>{{ r.source_created_at }}</td><td>{{ r.request_status }}</td><td>{{ r.full_name }}</td><td>{{ r.phone_raw|phone_ru }}</td>
   <td>{{ r.car_brand }} {{ r.car_model }}</td><td>{{ r.car_plate }}</td><td>{{ r.problem_description }}</td>
   <td><a href="/requests/{{ r.request_id }}">Открыть</a></td>
 </tr>

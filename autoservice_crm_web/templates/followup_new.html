@@ -3,9 +3,9 @@
 <h1>Новое напоминание</h1>
 <form method="post" class="form-grid">
   <label>Клиент* <input name="client_id" list="clients-list" placeholder="ID|ФИО|Телефон" required></label>
-  <datalist id="clients-list">{% for c in clients %}<option value="{{ c.client_id }}|{{ c.full_name }}|{{ c.phone_raw }}"></option>{% endfor %}</datalist>
+  <datalist id="clients-list">{% for c in clients %}<option value="{{ c.client_id }}|{{ c.full_name }}|{{ c.phone_raw|phone_ru }}"></option>{% endfor %}</datalist>
   <label>Авто <select name="car_id"><option value="">Не выбрано</option>{% for car in cars %}<option value="{{ car.car_id }}">{{ car.brand }} {{ car.model }} {{ car.plate_number }}</option>{% endfor %}</select></label>
-  <label>Тип задачи* <select name="task_type"><option>first_contact</option><option>callback</option><option>service_reminder</option><option>seasonal_offer</option><option>repair_followup</option></select></label>
+  <label>Тип задачи* <select name="task_type"><option value="Первичный контакт">Первичный контакт</option><option value="Перезвонить">Перезвонить</option><option value="Напомнить о ТО">Напомнить о ТО</option><option value="Сезонное предложение">Сезонное предложение</option><option value="Контроль после ремонта">Контроль после ремонта</option></select></label>
   <label>Дата* <input type="date" name="due_date" value="{{ today }}" required></label>
   <label>Заголовок* <input name="title" required></label>
   <label>Описание <textarea name="description"></textarea></label>

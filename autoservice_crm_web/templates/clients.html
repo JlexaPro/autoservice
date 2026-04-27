@@ -5,7 +5,7 @@
 <table>
 <tr><th>ID</th><th>ФИО</th><th>Телефон</th><th>Метка</th><th>Email</th><th>Комментарий</th></tr>
 {% for c in clients %}
-<tr><td>{{ c.client_id }}</td><td><a href="/clients/{{ c.client_id }}">{{ c.full_name }}</a></td><td>{{ c.phone_raw }}</td><td>{{ c.client_tone }}</td><td>{{ c.email or '' }}</td><td>{{ c.manager_comment or '' }}</td></tr>
+<tr><td>{{ c.client_id }}</td><td><a href="/clients/{{ c.client_id }}">{{ c.full_name }}</a></td><td>{{ c.phone_raw|phone_ru }}</td><td>{{ c.client_tone }}</td><td>{{ c.email or '' }}</td><td>{{ c.manager_comment or '' }}</td></tr>
 {% endfor %}
 </table>
 {% endblock %}
