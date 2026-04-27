@@ -47,6 +47,12 @@
     card.querySelector('.visit-content b').textContent = `${start}–${end}`;
     card.dataset.start = start;
     card.dataset.end = end;
+    updateCardCompactMode(card);
+  }
+
+  function updateCardCompactMode(card){
+    const h = parseInt(card.style.height || '0', 10);
+    card.classList.toggle('compact', h <= stepMin * 2 + 8);
   }
 
   async function apiUpdate(card){
@@ -66,6 +72,7 @@
   function lockSelection(lock){ document.body.style.userSelect = lock ? 'none' : ''; }
 
   board.querySelectorAll('.visit-card').forEach(card => {
+    updateCardCompactMode(card);
     card.addEventListener('dblclick', ()=> openModal(card));
     card.addEventListener('mousedown', (e)=>{
       if(e.target.classList.contains('resize-handle')) return;
@@ -138,7 +145,11 @@
 
   const modal = document.getElementById('visit-modal');
   const form = document.getElementById('visit-edit-form');
-  document.getElementById('modal-close')?.addEventListener('click', ()=> modal.classList.add('hidden'));
+  const createModal = document.getElementById('create-slot-modal');
+  const closeModal = () => modal?.classList.add('hidden');
+  const closeCreateModal = () => createModal?.classList.add('hidden');
+  document.getElementById('modal-close')?.addEventListener('click', closeModal);
+  document.getElementById('visit-modal-x')?.addEventListener('click', closeModal);
 
   function openModal(card){
     modal.classList.remove('hidden');
@@ -194,7 +205,6 @@
       const start = minToTime(min);
       const end = minToTime(min+stepMin);
       const bay = grid.closest('.bay-col').dataset.bayId;
-      const createModal = document.getElementById('create-slot-modal');
       const createForm = document.getElementById('create-slot-form');
       if(createModal && createForm){
         createModal.classList.remove('hidden');
@@ -204,7 +214,8 @@
       }
     });
   });
-  document.getElementById('create-modal-close')?.addEventListener('click', ()=> document.getElementById('create-slot-modal')?.classList.add('hidden'));
+  document.getElementById('create-modal-close')?.addEventListener('click', closeCreateModal);
+  document.getElementById('create-modal-x')?.addEventListener('click', closeCreateModal);
 
   document.querySelectorAll('.free-slot-btn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -212,7 +223,6 @@
       const start = btn.dataset.start;
       const startMin = parseTimeToMin(start);
       const end = minToTime((startMin - parseTimeToMin(startTime)) + stepMin);
-      const createModal = document.getElementById('create-slot-modal');
       const createForm = document.getElementById('create-slot-form');
       if(createModal && createForm){
         createModal.classList.remove('hidden');
@@ -243,6 +253,18 @@
     if(data.ok){
       if(data.bay_id) form.querySelector('[name="service_bay_id"]').value = String(data.bay_id);
       if(data.employee_id) form.querySelector('[name="employee_id"]').value = String(data.employee_id);
+    }
+  });
+
+  [modal, createModal].forEach((m) => {
+    m?.addEventListener('click', (e) => {
+      if (e.target === m) m.classList.add('hidden');
+    });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeModal();
+      closeCreateModal();
     }
   });
 })();

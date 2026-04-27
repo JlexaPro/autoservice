@@ -7,41 +7,54 @@
   <button class="btn">Применить</button>
 </form>
 <p><a class="btn" href="/finance/export.xlsx?start_date={{ start_date }}&end_date={{ end_date }}">Выгрузить в Excel</a></p>
+
 <div class="cards">
   <div class="card">Выручка: <b>{{ '%.2f'|format(total_revenue) }} ₽</b></div>
-  <div class="card">Прибыль мастеров: <b>{{ '%.2f'|format(total_master_profit) }} ₽</b></div>
-  <div class="card">Прибыль сервиса: <b>{{ '%.2f'|format(service_profit) }} ₽</b></div>
+  <div class="card">Себестоимость: <b>{{ '%.2f'|format(total_cost) }} ₽</b></div>
+  <div class="card">Валовая прибыль: <b>{{ '%.2f'|format(gross_profit) }} ₽</b></div>
+  <div class="card">Маржа: <b>{{ '%.1f'|format(margin_pct) }}%</b></div>
   <div class="card">Средний чек: <b>{{ '%.2f'|format(avg_check) }} ₽</b></div>
+  <div class="card">Оплачено за период: <b>{{ '%.2f'|format(paid_total) }} ₽</b></div>
+  <div class="card">Долг по закрытым ЗН: <b>{{ '%.2f'|format(debt_total) }} ₽</b></div>
   <div class="card">Закрытых заказ-нарядов: <b>{{ closed_orders_count }}</b></div>
-  <div class="card">Выручка по ЗН: <b>{{ '%.2f'|format(wo_revenue) }} ₽</b></div>
-  <div class="card">Себестоимость по ЗН: <b>{{ '%.2f'|format(wo_cost) }} ₽</b></div>
-  <div class="card">Прибыль по ЗН: <b>{{ '%.2f'|format(wo_profit) }} ₽</b></div>
-  <div class="card">Средний чек по ЗН: <b>{{ '%.2f'|format(wo_avg_check) }} ₽</b></div>
 </div>
-<h3>По мастерам</h3>
-<table><tr><th>Мастер</th><th>Визитов</th><th>Выручка</th><th>Прибыль мастера</th></tr>
-{% for name, row in by_master %}<tr><td>{{ name }}</td><td>{{ row.count }}</td><td>{{ '%.2f'|format(row.revenue) }}</td><td>{{ '%.2f'|format(row.profit) }}</td></tr>{% endfor %}
-</table>
-<h3>ТОП прибыльных клиентов</h3>
-<table><tr><th>Клиент</th><th>Прибыль</th></tr>
-{% for name, profit in by_client %}<tr><td>{{ name }}</td><td>{{ '%.2f'|format(profit) }}</td></tr>{% endfor %}
-</table>
-<h3>Выручка по типам работ</h3>
-<table><tr><th>Тип работ</th><th>Выручка</th></tr>
-{% for wt, amount in by_work_type %}<tr><td>{{ wt }}</td><td>{{ '%.2f'|format(amount) }}</td></tr>{% endfor %}
-</table>
+
 <h3>ТОП работ (закрытые заказ-наряды)</h3>
 <table><tr><th>Работа</th><th>Выручка</th></tr>
-{% for wt, amount in top_works %}<tr><td>{{ wt }}</td><td>{{ '%.2f'|format(amount) }}</td></tr>{% endfor %}
+{% for wt, amount in top_works %}<tr><td>{{ wt }}</td><td>{{ '%.2f'|format(amount or 0) }}</td></tr>{% endfor %}
 </table>
-<h3>ТОП запчастей (закрытые заказ-наряды)</h3>
-<table><tr><th>Запчасть</th><th>Выручка</th></tr>
-{% for pn, amount in top_parts %}<tr><td>{{ pn }}</td><td>{{ '%.2f'|format(amount) }}</td></tr>{% endfor %}
+
+<h3>ТОП запчастей по прибыли</h3>
+<table><tr><th>Запчасть</th><th>Прибыль</th></tr>
+{% for pn, amount in top_parts %}<tr><td>{{ pn }}</td><td>{{ '%.2f'|format(amount or 0) }}</td></tr>{% endfor %}
 </table>
-<h3>Детализация визитов</h3>
-<table><tr><th>Дата</th><th>Клиент</th><th>Авто</th><th>Мастер</th><th>Вид работы</th><th>Стоимость</th><th>Прибыль мастера</th><th>Прибыль сервиса</th></tr>
-{% for v,e,c,car in visits %}<tr>
-  <td>{{ v.planned_start_at }}</td><td>{{ c.full_name }}</td><td>{{ car.brand }} {{ car.model }} {{ car.plate_number }}</td><td>{{ e.full_name if e else '' }}</td><td>{{ v.work_type }}</td><td>{{ v.work_cost or 0 }}</td><td>{{ v.master_profit or 0 }}</td><td>{{ (v.work_cost or 0) - (v.master_profit or 0) }}</td>
-</tr>{% endfor %}
+
+<h3>Прибыль по мастерам (по работам)</h3>
+<table><tr><th>Мастер</th><th>Прибыль</th></tr>
+{% for name, profit in master_profit_rows %}<tr><td>{{ name }}</td><td>{{ '%.2f'|format(profit or 0) }}</td></tr>{% endfor %}
+</table>
+
+<h3>Убыточные / нулевые закрытые заказ-наряды</h3>
+<table><tr><th>№</th><th>Клиент</th><th>Сумма</th><th>Прибыль</th></tr>
+{% for wo in low_profit_orders %}
+<tr>
+  <td><a href="/work-orders/{{ wo.work_order_id }}">{{ wo.order_number }}</a></td>
+  <td>{{ wo.client_id }}</td>
+  <td>{{ '%.2f'|format(wo.total_amount or 0) }}</td>
+  <td>{{ '%.2f'|format(wo.total_profit or 0) }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<h3>Неоплаченные закрытые заказ-наряды</h3>
+<table><tr><th>№</th><th>Сумма</th><th>Оплачено</th><th>Долг</th></tr>
+{% for wo, paid, debt in unpaid_orders %}
+<tr>
+  <td><a href="/work-orders/{{ wo.work_order_id }}">{{ wo.order_number }}</a></td>
+  <td>{{ '%.2f'|format(wo.total_amount or 0) }}</td>
+  <td>{{ '%.2f'|format(paid or 0) }}</td>
+  <td>{{ '%.2f'|format(debt or 0) }}</td>
+</tr>
+{% endfor %}
 </table>
 {% endblock %}

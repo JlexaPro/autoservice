@@ -1,5 +1,8 @@
 @echo off
 setlocal EnableExtensions
+chcp 65001 >nul
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 
 echo ================================================
 echo Autoservice CRM - безопасный запуск
@@ -53,7 +56,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":8000 .*LISTENING"') d
 echo [6/6] Запуск сервера...
 echo Откройте в браузере: http://127.0.0.1:8000
 echo Для остановки нажмите Ctrl+C
-python -m uvicorn app:app --host 127.0.0.1 --port 8000
+python -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-use-colors
 if errorlevel 1 goto :err_uvicorn
 
 goto :ok

@@ -53,6 +53,17 @@
            data-work-cost="{{ v.work_cost }}"
            data-master-profit="{{ v.master_profit }}"
            style="top: {{ v.top*2 }}px; height: {{ v.height*2 }}px;">
+        <div class="visit-hotkeys">
+          <form method="post" action="/service_visits/{{ v.visit_id }}/action" class="inline-hotkeys">
+            <input type="hidden" name="day" value="{{ day }}">
+            <button class="btn hotkey-btn" name="action" value="start" title="Начать">▶</button>
+            <button class="btn hotkey-btn" name="action" value="finish" title="Завершить">✓</button>
+            <button class="btn hotkey-btn" name="action" value="cancel" title="Отменить">✕</button>
+          </form>
+          <form method="post" action="/visits/{{ v.visit_id }}/work-order" class="inline-hotkeys">
+            <button class="btn hotkey-btn" title="Заказ-наряд">ЗН</button>
+          </form>
+        </div>
         <div class="visit-content">
           <b>{{ v.start }}–{{ v.end }}</b><br>
           {{ v.client }}<br>{{ v.car }} {{ v.plate }}<br>{{ v.problem }}<br>Статус: {{ v.status }}<br>Мастер: {{ v.employee or '—' }}
@@ -74,6 +85,7 @@
 
 <div id="visit-modal" class="modal hidden">
   <div class="modal-card">
+    <button class="modal-x" type="button" id="visit-modal-x" aria-label="Закрыть">×</button>
     <h3>Редактировать визит</h3>
     <form id="visit-edit-form" class="form-grid">
       <input type="hidden" name="visit_id">
@@ -134,6 +146,7 @@
 
 <div id="create-slot-modal" class="modal hidden">
   <div class="modal-card">
+    <button class="modal-x" type="button" id="create-modal-x" aria-label="Закрыть">×</button>
     <h3>Создать запись в слоте</h3>
     <form id="create-slot-form" method="post" action="/service_visits" class="form-grid">
       <label>Дата <input type="date" name="day" value="{{ day }}"></label>
