@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>{{ car.brand }} {{ car.model }} {{ car.plate_number }}</h1>
+<p>Год: {{ car.car_year or '-' }} | VIN: {{ car.vin or '-' }} | <a href="/clients/{{ car.client_id }}">Владелец</a></p>
+<h3>Добавить работу</h3>
+<form method="post" action="/cars/{{ car.car_id }}/works" class="form-grid">
+  <label>Дата <input type="date" name="work_date" required></label>
+  <label>Сотрудник
+    <select name="employee_id">
+      <option value="">Не указан</option>
+      {% for e in employees %}<option value="{{ e.employee_id }}">{{ e.full_name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Что делали <textarea name="work_summary" required></textarea></label>
+  <label>Комментарий <textarea name="comment"></textarea></label>
+  <button class="btn">Сохранить</button>
+</form>
+<h3>История работ</h3>
+<ul>{% for w in works %}<li>{{ w.work_date }} | {{ w.display_employee }} | {{ w.work_summary }} | {{ w.comment or '' }}</li>{% endfor %}</ul>
+<h3>История заявок</h3>
+<ul>{% for r in reqs %}<li><a href="/requests/{{ r.request_id }}">#{{ r.request_id }}</a> {{ r.problem_description }}</li>{% endfor %}</ul>
+{% endblock %}

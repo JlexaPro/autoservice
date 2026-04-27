@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Заявка #{{ req.request_id }}</h1>
+{% if msg %}<div class="warn">{{ msg }}</div>{% endif %}
+<p><b>Статус:</b> {{ req.request_status }}</p>
+<p><b>Клиент:</b> {% if client %}<a href="/clients/{{ client.client_id }}">{{ client.full_name }}</a>{% else %}{{ req.full_name }}{% endif %}</p>
+<p><b>Машина:</b> {% if car %}<a href="/cars/{{ car.car_id }}">{{ car.brand }} {{ car.model }} {{ car.plate_number }}</a>{% endif %}</p>
+<p><b>Проблема:</b> {{ req.problem_description }}</p>
+<form method="post" action="/requests/{{ req.request_id }}/status" class="actions">
+  <button class="btn" name="action" value="not_reached">Не дозвонился</button>
+  <button class="btn" name="action" value="booked">Записал</button>
+  <button class="btn" name="action" value="refused">Отказ</button>
+  <button class="btn" name="action" value="closed">Закрыть</button>
+</form>
+<p>
+  <a class="btn" href="/planner?view_mode=day&from_request_id={{ req.request_id }}{% if req.desired_visit_date %}&day={{ req.desired_visit_date }}{% endif %}">
+    Запланировать в планере
+  </a>
+</p>
+<h3>История статусов</h3>
+<ul>{% for h in history %}<li>{{ h.changed_at }}: {{ h.old_status }} → {{ h.new_status }} {{ h.comment or '' }}</li>{% endfor %}</ul>
+<h3>Напоминания</h3>
+<ul>{% for f in followups %}<li>{{ f.due_date }} {{ f.task_status }} — {{ f.title }}</li>{% endfor %}</ul>
+{% endblock %}

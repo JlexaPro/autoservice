@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Новый клиент</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" class="form-grid">
+  <label>ФИО* <input name="full_name" required></label>
+  <label>Телефон* <input name="phone_raw" required></label>
+  <label>Email <input name="email"></label>
+  <label>Метка
+    <select name="client_tone"><option>Новый</option><option selected>Нейтральный</option><option>Хороший</option><option>Сложный</option></select>
+  </label>
+  <label>Теги <input name="client_tags"></label>
+  <label>Комментарий <textarea name="manager_comment"></textarea></label>
+  <button class="btn">Сохранить</button>
+</form>
+{% endblock %}
