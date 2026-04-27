@@ -6,11 +6,13 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import Date, and_, cast, func, or_, select
+from sqlalchemy import Date, and_, cast, func, or_, select, text
 from sqlalchemy.orm import Session
 from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 from db import get_db
 from models import (
@@ -49,6 +51,19 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 DEFAULT_WORK_START = "09:00"
 DEFAULT_WORK_END = "19:00"
 DEFAULT_SLOT_STEP_MIN = 30
+
+
+@app.on_event("startup")
+def startup_migrations():
+    from db import engine
+    stmts = [
+        "ALTER TABLE app.employees ADD COLUMN IF NOT EXISTS birth_date date",
+        "ALTER TABLE app.employees ADD COLUMN IF NOT EXISTS hourly_rate numeric(12,2)",
+        "ALTER TABLE app.employees ADD COLUMN IF NOT EXISTS comments text",
+    ]
+    with engine.begin() as conn:
+        for stmt in stmts:
+            conn.execute(text(stmt))
 
 
 def get_setting(db: Session, key: str, default: str) -> str:
@@ -277,6 +292,15 @@ def car_detail(request: Request, car_id: int, db: Session = Depends(get_db)):
     visits = db.execute(select(ServiceVisit).where(ServiceVisit.car_id == car_id).order_by(ServiceVisit.created_at.desc())).scalars().all()
     reqs = db.execute(select(ServiceRequest).where(ServiceRequest.car_id == car_id).order_by(ServiceRequest.request_id.desc())).scalars().all()
     employees = db.execute(select(Employee).where(Employee.is_active.is_(True)).order_by(Employee.full_name)).scalars().all()
+    emp_by_number = {e.employee_number: f"{e.full_name} ({e.employee_number})" for e in employees}
+    for w in works:
+        if w.employee_id:
+            emp = next((e for e in employees if e.employee_id == w.employee_id), None)
+            w.display_employee = f"{emp.full_name} ({emp.employee_number})" if emp else (w.employee_number or "-")
+        elif w.employee_number and w.employee_number in emp_by_number:
+            w.display_employee = emp_by_number[w.employee_number]
+        else:
+            w.display_employee = w.employee_number or "-"
     return templates.TemplateResponse("car_detail.html", {"request": request, "car": car, "works": works, "visits": visits, "reqs": reqs, "employees": employees})
 
 
@@ -291,7 +315,7 @@ def add_car_work(car_id: int, work_date: date = Form(...), employee_id: int | No
             car_id=car_id,
             work_date=work_date,
             employee_id=employee_id,
-            employee_number=employee.full_name if employee else None,
+            employee_number=f"{employee.full_name} ({employee.employee_number})" if employee else None,
             work_summary=work_summary,
             comment=comment or None,
             created_by="manager",
@@ -347,14 +371,13 @@ def planner(request: Request, day: date | None = None, error: str = "", db: Sess
     day_start = datetime.combine(d, start_t)
     day_end = datetime.combine(d, end_t)
     visits = db.execute(
-        select(ServiceVisit, Client, Car, Employee)
+        select(ServiceVisit, Client, Car)
         .join(Client, Client.client_id == ServiceVisit.client_id)
         .join(Car, Car.car_id == ServiceVisit.car_id)
-        .join(Employee, Employee.employee_id == ServiceVisit.assigned_employee_id, isouter=True)
         .where(ServiceVisit.planned_start_at < day_end, ServiceVisit.planned_end_at > day_start, ServiceVisit.service_bay_id.is_not(None))
     ).all()
     visit_blocks = []
-    for visit, client, car, employee in visits:
+    for visit, client, car in visits:
         planned_start = normalize_dt_for_planner(visit.planned_start_at)
         planned_end = normalize_dt_for_planner(visit.planned_end_at)
         if not planned_start or not planned_end:
@@ -374,7 +397,7 @@ def planner(request: Request, day: date | None = None, error: str = "", db: Sess
             "plate": car.plate_number,
             "problem": visit.problem_description,
             "work_type": visit.work_type,
-            "employee": employee.full_name if employee else "",
+            "employee": visit.assigned_employee_number or "",
             "employee_id": visit.assigned_employee_id,
             "has_conflict": False,
         })
@@ -480,33 +503,36 @@ def create_service_visit(
     end_dt = datetime.combine(day, et)
     try:
         _check_visit_overlap(db, start_dt, end_dt, service_bay_id, employee_id)
-        with db.begin():
-            employee = db.get(Employee, employee_id) if employee_id else None
-            visit = ServiceVisit(
-                request_id=request_id,
-                client_id=client_id,
-                    car_id=car_id_int,
-                visit_source="request" if request_id else "manual",
-                visit_status="Записан",
-                work_type=work_type.strip(),
-                problem_description=problem_description,
-                planned_start_at=start_dt,
-                planned_end_at=end_dt,
-                assigned_employee_id=employee_id,
-                assigned_employee_number=employee.full_name if employee else None,
-                service_bay_id=service_bay_id,
-                work_cost=work_cost,
-                master_profit=master_profit,
-            )
-            db.add(visit)
-            db.flush()
-            _sync_service_slot(db, visit)
-            if request_id:
-                req = db.get(ServiceRequest, request_id)
-                if req:
-                    change_request_status(db, req, "Записан", comment="Запись через планер")
+        employee = db.get(Employee, employee_id) if employee_id else None
+        visit = ServiceVisit(
+            request_id=request_id,
+            client_id=client_id,
+            car_id=car_id_int,
+            visit_source="request" if request_id else "manual",
+            visit_status="Записан",
+            work_type=work_type.strip(),
+            problem_description=problem_description,
+            planned_start_at=start_dt,
+            planned_end_at=end_dt,
+            assigned_employee_id=employee_id,
+            assigned_employee_number=employee.full_name if employee else None,
+            service_bay_id=service_bay_id,
+            work_cost=work_cost,
+            master_profit=master_profit,
+        )
+        db.add(visit)
+        db.flush()
+        _sync_service_slot(db, visit)
+        if request_id:
+            req = db.get(ServiceRequest, request_id)
+            if req:
+                change_request_status(db, req, "Записан", comment="Запись через планер")
+        db.commit()
     except HTTPException as e:
         return RedirectResponse(f"/planner?day={day.isoformat()}&error={e.detail}", status_code=303)
+    except Exception:
+        db.rollback()
+        return RedirectResponse(f"/planner?day={day.isoformat()}&error=Не удалось создать визит", status_code=303)
     return RedirectResponse(f"/planner?day={day.isoformat()}", status_code=303)
 
 
@@ -533,18 +559,18 @@ def update_visit_common(visit_id: int, payload: dict, db: Session):
     employee_id = int(payload["employee_id"]) if payload.get("employee_id") else None
     try:
         _check_visit_overlap(db, start_dt, end_dt, service_bay_id, employee_id, exclude_visit_id=visit_id)
-        with db.begin():
-            visit.planned_start_at = start_dt
-            visit.planned_end_at = end_dt
-            visit.service_bay_id = service_bay_id
-            visit.assigned_employee_id = employee_id
-            visit.client_id = int(payload["client_id"]) if payload.get("client_id") else visit.client_id
-            visit.car_id = int(payload["car_id"]) if payload.get("car_id") else visit.car_id
-            visit.problem_description = none_if_empty(payload.get("problem_description")) or visit.problem_description
-            visit.work_type = none_if_empty(payload.get("work_type")) or visit.work_type
-            visit.service_comment = none_if_empty(payload.get("service_comment"))
-            visit.visit_status = none_if_empty(payload.get("visit_status")) or visit.visit_status
-            _sync_service_slot(db, visit)
+        visit.planned_start_at = start_dt
+        visit.planned_end_at = end_dt
+        visit.service_bay_id = service_bay_id
+        visit.assigned_employee_id = employee_id
+        visit.client_id = int(payload["client_id"]) if payload.get("client_id") else visit.client_id
+        visit.car_id = int(payload["car_id"]) if payload.get("car_id") else visit.car_id
+        visit.problem_description = none_if_empty(payload.get("problem_description")) or visit.problem_description
+        visit.work_type = none_if_empty(payload.get("work_type")) or visit.work_type
+        visit.service_comment = none_if_empty(payload.get("service_comment"))
+        visit.visit_status = none_if_empty(payload.get("visit_status")) or visit.visit_status
+        _sync_service_slot(db, visit)
+        db.commit()
         return {"ok": True, "visit": {"visit_id": visit.visit_id, "service_bay_id": visit.service_bay_id, "start_time": st.strftime("%H:%M"), "end_time": et.strftime("%H:%M")}}
     except HTTPException as e:
         return {"ok": False, "error": e.detail}
@@ -817,36 +843,48 @@ def work_order_pdf(work_order_id: int, db: Session = Depends(get_db)):
     car = db.get(Car, wo.car_id)
     items = db.execute(select(WorkOrderItem).where(WorkOrderItem.work_order_id == work_order_id)).scalars().all()
     parts = db.execute(select(WorkOrderPart).where(WorkOrderPart.work_order_id == work_order_id)).scalars().all()
+    font_name = "Helvetica"
+    for path in [
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ]:
+        try:
+            pdfmetrics.registerFont(TTFont("UnicodeFont", path))
+            font_name = "UnicodeFont"
+            break
+        except Exception:
+            continue
     buff = BytesIO()
     pdf = canvas.Canvas(buff, pagesize=A4)
     y = 800
-    pdf.setFont("Helvetica-Bold", 13)
+    pdf.setFont(font_name, 13)
     pdf.drawString(40, y, f"Заказ-наряд № {wo.order_number}")
     y -= 20
-    pdf.setFont("Helvetica", 10)
+    pdf.setFont(font_name, 10)
     pdf.drawString(40, y, f"Дата: {wo.opened_at}")
     y -= 15
     pdf.drawString(40, y, f"Клиент: {client.full_name if client else ''}")
     y -= 15
     pdf.drawString(40, y, f"Авто: {car.brand if car else ''} {car.model if car else ''} {car.plate_number if car else ''}")
     y -= 20
-    pdf.setFont("Helvetica-Bold", 11)
+    pdf.setFont(font_name, 11)
     pdf.drawString(40, y, "Работы")
     y -= 15
-    pdf.setFont("Helvetica", 10)
+    pdf.setFont(font_name, 10)
     for i in items:
         pdf.drawString(45, y, f"{i.work_type} | {i.qty} x {i.unit_price} = {i.line_total}")
         y -= 13
     y -= 8
-    pdf.setFont("Helvetica-Bold", 11)
+    pdf.setFont(font_name, 11)
     pdf.drawString(40, y, "Запчасти")
     y -= 15
-    pdf.setFont("Helvetica", 10)
+    pdf.setFont(font_name, 10)
     for p in parts:
         pdf.drawString(45, y, f"{p.part_name} | {p.qty} x {p.sale_price} = {p.line_total}")
         y -= 13
     y -= 15
-    pdf.setFont("Helvetica-Bold", 11)
+    pdf.setFont(font_name, 11)
     pdf.drawString(40, y, f"Итого: {wo.total_amount} | Себестоимость: {wo.total_cost} | Прибыль: {wo.total_profit}")
     pdf.showPage()
     pdf.save()

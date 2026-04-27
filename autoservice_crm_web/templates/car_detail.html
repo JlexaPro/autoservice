@@ -16,7 +16,7 @@
   <button class="btn">Сохранить</button>
 </form>
 <h3>История работ</h3>
-<ul>{% for w in works %}<li>{{ w.work_date }} | {{ w.employee_number or '-' }} | {{ w.work_summary }} | {{ w.comment or '' }}</li>{% endfor %}</ul>
+<ul>{% for w in works %}<li>{{ w.work_date }} | {{ w.display_employee }} | {{ w.work_summary }} | {{ w.comment or '' }}</li>{% endfor %}</ul>
 <h3>История заявок</h3>
 <ul>{% for r in reqs %}<li><a href="/requests/{{ r.request_id }}">#{{ r.request_id }}</a> {{ r.problem_description }}</li>{% endfor %}</ul>
 {% endblock %}
